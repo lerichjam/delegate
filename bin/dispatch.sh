@@ -111,5 +111,15 @@ fi
 echo
 echo "=== diff --stat (against base $(git rev-parse --short "$BASE")) ==="
 git --no-pager diff --stat "$BASE"
+# A file the executor created is untracked, so no form of `git diff` mentions
+# it. Listing untracked paths separately is the only way the advisor's review
+# can see the executor's most likely out-of-scope error: a new file.
+echo "=== untracked (new files) ==="
+UNTRACKED="$(git status --porcelain --untracked-files=all | sed -n 's/^?? //p' | grep -v '^"\{0,1\}\.advisor/' || true)"
+if [ -n "$UNTRACKED" ]; then
+  printf '%s\n' "$UNTRACKED"
+else
+  echo "(none)"
+fi
 echo "=== end ==="
 exit $EXIT_OK
