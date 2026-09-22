@@ -115,12 +115,16 @@ if [ $RC -eq 0 ]; then
 else
   echo "  FAIL: command substitution returned $RC (expected 0)"; FAIL=$((FAIL+1))
 fi
-# Check that no orphaned sleep 600 processes were left behind
-if [ "$after" -eq "$before" ]; then
+# Check that no orphaned sleep 600 processes were left behind.
+# Compare the PID sets directly rather than counts: `echo "" | wc -l` is 1,
+# not 0, so an empty-vs-one-orphan case would be indistinguishable by count
+# alone (before=1, after=1 -> false PASS on a clean machine with one leak).
+if [ "$before_pids" = "$after_pids" ]; then
   echo "  PASS: no orphaned sleep 600 processes"; PASS=$((PASS+1))
 else
-  # Report which PIDs are new orphans
-  new_orphans=$(comm -13 <(echo "$before_pids") <(echo "$after_pids"))
+  # Report which PIDs are new orphans. printf (not echo "") keeps a blank
+  # before_pids from introducing a spurious empty line into comm's input.
+  new_orphans=$(comm -13 <(printf '%s\n' "$before_pids" | grep -v '^$') <(printf '%s\n' "$after_pids" | grep -v '^$'))
   echo "  FAIL: orphaned sleep 600 processes found (before: $before, after: $after); new PIDs: $new_orphans"; FAIL=$((FAIL+1))
 fi
 
