@@ -58,11 +58,13 @@ echo "dispatch: log -> $LOG"
 # watchdog subshell kill it. A TERM-killed child reports 143.
 opencode "${ARGS[@]}" >"$LOG" 2>&1 &
 CMD_PID=$!
-( sleep "$TIMEOUT"; kill -TERM "$CMD_PID" 2>/dev/null ) &
+( sleep "$TIMEOUT"; kill -TERM "$CMD_PID" 2>/dev/null ) >/dev/null 2>&1 &
 WATCHDOG_PID=$!
 
 wait "$CMD_PID"; RC=$?
-kill -9 "$WATCHDOG_PID" 2>/dev/null
+kill -TERM "$WATCHDOG_PID" 2>/dev/null
+pkill -P "$WATCHDOG_PID" >/dev/null 2>&1
+wait "$WATCHDOG_PID" 2>/dev/null
 
 if [ "$RC" -eq 143 ]; then
   echo "dispatch: timed out after ${TIMEOUT}s" >&2
