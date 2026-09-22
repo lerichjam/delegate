@@ -178,6 +178,43 @@ else
   echo "  PASS: 'git add -A' could not stage anything under .advisor/runs"; PASS=$((PASS+1))
 fi
 
+echo "test: a file the executor CREATES is surfaced, though git diff cannot show it"
+new_fixture
+OUT="$(STUB_CREATE="$FIX/created.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md 2>&1)"
+check "create-only round exits 0" 0 $?
+# The diff half of the output must NOT mention the new file -- that is the
+# whole defect: an advisor reading only the diff sees nothing. If this ever
+# starts failing because git learned to show untracked files in a diff, the
+# assertion below stops proving anything and must be revisited.
+DIFF_PART="$(printf '%s\n' "$OUT" | sed -n '/=== diff --stat/,/=== untracked/p')"
+UNTRACKED_PART="$(printf '%s\n' "$OUT" | sed -n '/=== untracked/,/=== end ===/p')"
+if printf '%s\n' "$DIFF_PART" | grep -q 'created.txt'; then
+  echo "  FAIL: diff section named the new file -- this test no longer discriminates"; FAIL=$((FAIL+1))
+else
+  echo "  PASS: diff section is blind to the new file (precondition)"; PASS=$((PASS+1))
+fi
+if printf '%s\n' "$UNTRACKED_PART" | grep -q 'created.txt'; then
+  echo "  PASS: untracked section surfaced the created file"; PASS=$((PASS+1))
+else
+  echo "  FAIL: created file appeared nowhere in dispatch's output"; FAIL=$((FAIL+1))
+fi
+
+echo "test: no new files -> untracked section says (none), and never lists .advisor/"
+new_fixture
+echo "new brief" > .advisor/briefs/002-new.md
+OUT="$(STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/002-new.md 2>&1)"
+UNTRACKED_PART="$(printf '%s\n' "$OUT" | sed -n '/=== untracked/,/=== end ===/p')"
+if printf '%s\n' "$UNTRACKED_PART" | grep -q '(none)'; then
+  echo "  PASS: reports (none) when the executor created nothing"; PASS=$((PASS+1))
+else
+  echo "  FAIL: untracked section did not report (none)"; FAIL=$((FAIL+1))
+fi
+if printf '%s\n' "$UNTRACKED_PART" | grep -q '\.advisor/'; then
+  echo "  FAIL: untracked section listed the advisor's own brief"; FAIL=$((FAIL+1))
+else
+  echo "  PASS: the advisor's own untracked brief is excluded"; PASS=$((PASS+1))
+fi
+
 echo "test: dispatch through command substitution does not hang or leak sleep"
 new_fixture
 # Census orphaned sleep 600 processes (PPID 1 only, not system-wide)

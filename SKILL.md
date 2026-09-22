@@ -76,12 +76,19 @@ mean the attempt happened and failed.
 
 Establish what happened yourself. The executor's report is a hypothesis.
 
-1. `git --no-pager diff` — read it in full.
-2. Re-run every command in the brief's Verification section **yourself**.
+1. `git --no-pager diff <BASE>` — read it in full, using the base SHA
+   dispatch echoed. Pinning to the base is what makes the diff mean
+   anything on round 2 or later, when the tree already holds round 1.
+2. `git status --porcelain --untracked-files=all` — then read every new
+   file in full. **`git diff` cannot show a file the executor created:**
+   a new file is untracked, so no form of diff mentions it. Dispatch
+   prints these under `=== untracked (new files) ===`; a new file the
+   brief did not ask for is an Out of scope violation, not a bonus.
+3. Re-run every command in the brief's Verification section **yourself**.
    Never accept pasted output as evidence.
-3. Check the diff against each Acceptance criterion and against Out of
-   scope.
-4. Check for a `BRIEF PROBLEM:` marker in `.advisor/runs/NNN-slug-rN.log`
+4. Check the diff *and the new files* against each Acceptance criterion
+   and against Out of scope.
+5. Check for a `BRIEF PROBLEM:` marker in `.advisor/runs/NNN-slug-rN.log`
    — that means the executor stopped deliberately and your brief needs
    fixing, not the code.
 
@@ -99,7 +106,11 @@ Establish what happened yourself. The executor's report is a hypothesis.
   never named, or a correction would discard more of the round than it
   keeps. A useful test — if your delta is getting longer than the brief's
   Contracts section, you are writing a new brief, so roll back instead:
-  `git checkout -- .`, then re-brief from the baseline.
+  `git checkout -- . && git clean -fd -e .advisor`, then re-brief from
+  the baseline. `git checkout` alone leaves files the executor created
+  behind to contaminate the next round, and `-e .advisor` is not
+  optional — the brief itself is untracked, so a bare `git clean -fd`
+  would delete the very thing you are about to re-brief from.
 
 ### 7. Round cap
 
