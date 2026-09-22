@@ -89,11 +89,17 @@ Establish what happened yourself. The executor's report is a hypothesis.
 
 - **ACCEPT** — summarize for the user, offer a commit that includes the
   brief.
-- **CORRECT** — append a `## Round N delta` section to the brief naming
-  only what was wrong and what to change, then dispatch again with
-  `--round N --continue`. Do not rewrite the whole brief.
-- **ROLLBACK** — for a round that went badly wrong: `git checkout -- .`,
-  then re-brief from the baseline.
+- **CORRECT** — the shape is right and you can name the fix. Append a
+  `## Round N delta` section to the brief saying only what was wrong and
+  what to change, then dispatch again with `--round N --continue`. Do not
+  rewrite the whole brief.
+- **ROLLBACK** — you would have to write "undo this and start again"
+  rather than "change X to Y". Concretely: the executor chose a different
+  decomposition than Architecture specified, or it touched files Context
+  never named, or a correction would discard more of the round than it
+  keeps. A useful test — if your delta is getting longer than the brief's
+  Contracts section, you are writing a new brief, so roll back instead:
+  `git checkout -- .`, then re-brief from the baseline.
 
 ### 7. Round cap
 
@@ -108,6 +114,6 @@ unsuited to delegation; a fourth round fixes neither.
 | "The executor says tests pass, good" | Run them yourself. That is your entire job here. |
 | "The diff is long, I'll skim it" | Skimming means you delegated the review too. |
 | "Tree's only a little dirty" | Then the diff is contaminated. Stop. |
-| "I'll leave Contracts loose, it'll figure it out" | Vague contracts are the top cause of failed rounds. |
+| "I'll leave Contracts loose, it'll figure it out" | Go back and read more code until you can write the signatures. |
 | "Round 4 will get it" | The brief is wrong. Escalate. |
 | "Faster if I just write it myself" | Sometimes true — decide that at preflight, not after briefing. |
