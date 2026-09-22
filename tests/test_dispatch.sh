@@ -256,6 +256,44 @@ else
   echo "  FAIL: orphaned sleep 600 processes found (before: $before, after: $after); new PIDs: $new_orphans"; FAIL=$((FAIL+1))
 fi
 
+echo "test: the executor agent cannot run git commands that erase the diff"
+AGENT="$(dirname "$STUBDIR")/agent/executor.md"   # STUBDIR is absolute; cwd is a fixture
+# The advisor's whole verification is reading the diff. An executor that can
+# commit, stash, checkout or reset empties that diff before the advisor looks.
+for pat in 'git commit\*' 'git reset\*' 'git checkout\*' 'git stash\*' 'git clean\*' 'git push\*'; do
+  if grep -qE "^ +\"$pat\": *deny" "$AGENT"; then
+    echo "  PASS: ${pat%\\*} denied"; PASS=$((PASS+1))
+  else
+    echo "  FAIL: ${pat%\\*} is not denied in executor.md"; FAIL=$((FAIL+1))
+  fi
+done
+# Non-git bash must still be allowed, or the executor cannot run tests.
+if grep -qE '^ +"\*": *allow' "$AGENT"; then
+  echo "  PASS: bash is otherwise allowed"; PASS=$((PASS+1))
+else
+  echo "  FAIL: bash '*' allow entry is missing -- the executor cannot run anything"; FAIL=$((FAIL+1))
+fi
+# A malformed permission block would silently break the agent, so parse the
+# frontmatter when a YAML parser happens to be available. Skipped, never
+# failed, where there is none: the suite must not grow a dependency.
+if python3 -c 'import yaml' >/dev/null 2>&1; then
+  if python3 - "$AGENT" <<'PYEOF'
+import sys, yaml
+fm = open(sys.argv[1]).read().split('---')[1]
+d = yaml.safe_load(fm)
+b = d['permission']['bash']
+assert isinstance(b, dict) and b['*'] == 'allow', b
+assert b['git commit*'] == 'deny', b
+PYEOF
+  then
+    echo "  PASS: executor.md frontmatter parses and the bash map is well-formed"; PASS=$((PASS+1))
+  else
+    echo "  FAIL: executor.md frontmatter does not parse as expected"; FAIL=$((FAIL+1))
+  fi
+else
+  echo "  SKIP: no yaml parser available for the frontmatter check"
+fi
+
 echo
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]
