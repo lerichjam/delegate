@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Test double for `opencode`. Behaviour driven by env vars:
+#   STUB_EXIT=<n>    exit with this code (default 0)
+#   STUB_HANG=<n>    sleep n seconds before exiting (default 0)
+#   STUB_EDIT=<path> create/append to this file to simulate an edit
+echo "stub-opencode invoked with: $*"
+[ "${STUB_HANG:-0}" -gt 0 ] && sleep "${STUB_HANG}"
+[ -n "${STUB_EDIT:-}" ] && echo "edited by stub" >> "${STUB_EDIT}"
+exit "${STUB_EXIT:-0}"
