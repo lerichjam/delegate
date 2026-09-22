@@ -120,6 +120,29 @@ new_fixture
 STUB_HANG=5 "$DISPATCH" --brief .advisor/briefs/001-test.md --timeout 1 >/dev/null 2>&1
 check "timeout" 24 $?
 
+echo "test: a timeout kills the executor's whole process group"
+new_fixture
+# A real executor spawns subprocesses. Signalling only opencode leaves them
+# orphaned with edit and bash permissions intact, still mutating the repo
+# while the advisor reads the diff. `sleep 593` stands in for one.
+PIDFILE="$FIX/child.pid"
+STUB_CHILD=593 STUB_CHILD_PIDFILE="$PIDFILE" STUB_HANG=30 \
+  "$DISPATCH" --brief .advisor/briefs/001-test.md --timeout 1 >/dev/null 2>&1
+check "timeout still maps to 24" 24 $?
+if [ -s "$PIDFILE" ]; then
+  echo "  PASS: the run really did spawn a child (precondition)"; PASS=$((PASS+1))
+else
+  echo "  FAIL: no child was spawned -- the orphan check below proves nothing"; FAIL=$((FAIL+1))
+fi
+CHILD_PID="$(cat "$PIDFILE" 2>/dev/null)"
+sleep 1   # let the TERM/KILL escalation land
+if [ -n "$CHILD_PID" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
+  echo "  FAIL: orphaned executor child $CHILD_PID survived the timeout"; FAIL=$((FAIL+1))
+  kill -KILL "$CHILD_PID" 2>/dev/null   # never leave it behind for the next test
+else
+  echo "  PASS: the executor's child died with the group"; PASS=$((PASS+1))
+fi
+
 echo "test: --continue passes -c to opencode"
 new_fixture
 # Round 1 first: a continuation needs the baseline commit round 1 records.

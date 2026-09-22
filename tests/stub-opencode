@@ -2,6 +2,8 @@
 # Test double for `opencode`. Behaviour driven by env vars:
 #   STUB_EXIT=<n>    exit with this code (default 0)
 #   STUB_HANG=<n>    sleep n seconds before exiting (default 0)
+#   STUB_CHILD=<n>   spawn a background `sleep n` first, standing in for the
+#                    subprocesses a real executor leaves running
 #   STUB_NO_AGENT=1  `agent list` omits the executor agent
 #   STUB_EDIT=<path>   append to this (tracked) file to simulate an edit
 #   STUB_CREATE=<path> create this file to simulate the executor adding a
@@ -41,6 +43,10 @@ for arg in "$@"; do
   fi
 done
 
+if [ -n "${STUB_CHILD:-}" ]; then
+  sleep "${STUB_CHILD}" &
+  [ -n "${STUB_CHILD_PIDFILE:-}" ] && echo $! > "${STUB_CHILD_PIDFILE}"
+fi
 [ "${STUB_HANG:-0}" -gt 0 ] && sleep "${STUB_HANG}"
 [ -n "${STUB_EDIT:-}" ] && echo "edited by stub" >> "${STUB_EDIT}"
 [ -n "${STUB_CREATE:-}" ] && printf 'created by stub\n' > "${STUB_CREATE}"

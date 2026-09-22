@@ -102,9 +102,22 @@ echo "dispatch: log -> $LOG"
 
 # macOS ships no timeout(1), so run the command in the background and let a
 # watchdog subshell kill it. A TERM-killed child reports 143.
-opencode "${ARGS[@]}" >"$LOG" 2>&1 &
+#
+# `set -m` puts opencode in its own process group so the watchdog can signal
+# the group, not just opencode itself: the executor spawns children that hold
+# the same edit and bash permissions, and signalling the leader alone leaves
+# them orphaned but still writing to the repository the advisor is about to
+# review. stdin comes from /dev/null so a job-controlled background process
+# can never be stopped by SIGTTIN.
+set -m
+opencode "${ARGS[@]}" >"$LOG" 2>&1 </dev/null &
 CMD_PID=$!
-( sleep "$TIMEOUT"; kill -TERM "$CMD_PID" 2>/dev/null ) >/dev/null 2>&1 &
+set +m
+( sleep "$TIMEOUT" && {
+    kill -TERM -"$CMD_PID" 2>/dev/null
+    sleep 3
+    kill -KILL -"$CMD_PID" 2>/dev/null
+  } ) >/dev/null 2>&1 &
 WATCHDOG_PID=$!
 
 wait "$CMD_PID"; RC=$?
@@ -113,6 +126,9 @@ kill -TERM "$WATCHDOG_PID" 2>/dev/null
 wait "$WATCHDOG_PID" 2>/dev/null
 
 if [ "$RC" -eq 143 ]; then
+  # Reaping the leader does not dissolve the group: sweep whatever ignored
+  # the TERM, so nothing survives this script to keep editing the tree.
+  kill -KILL -"$CMD_PID" 2>/dev/null
   echo "dispatch: timed out after ${TIMEOUT}s" >&2
   exit $EXIT_TIMEOUT
 fi
