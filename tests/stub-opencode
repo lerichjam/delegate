@@ -4,6 +4,31 @@
 #   STUB_HANG=<n>    sleep n seconds before exiting (default 0)
 #   STUB_EDIT=<path> create/append to this file to simulate an edit
 echo "stub-opencode invoked with: $*"
+
+# Mirror the one real-CLI quirk that broke dispatch.sh in production: opencode
+# run's -f/--file is a yargs *array* option, so it greedily swallows every
+# positional argument that follows it, up to the next flag or a `--`
+# terminator. Any argument in that span that is not an existing file is a
+# hard error in the real CLI, so this stub must reproduce that or it cannot
+# catch the class of bug that shipped (message text parsed as a filename).
+collecting=0
+for arg in "$@"; do
+  if [ "$collecting" -eq 1 ]; then
+    if [ "$arg" = "--" ]; then
+      collecting=0
+      continue
+    fi
+    if [ ! -e "$arg" ]; then
+      echo "Error: File not found: $arg" >&2
+      exit 20
+    fi
+    continue
+  fi
+  if [ "$arg" = "-f" ] || [ "$arg" = "--file" ]; then
+    collecting=1
+  fi
+done
+
 [ "${STUB_HANG:-0}" -gt 0 ] && sleep "${STUB_HANG}"
 [ -n "${STUB_EDIT:-}" ] && echo "edited by stub" >> "${STUB_EDIT}"
 exit "${STUB_EXIT:-0}"

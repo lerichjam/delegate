@@ -49,7 +49,7 @@ LOG="$RUNDIR/${BRIEF_STEM}-r${ROUND}.log"
 ARGS=(run --agent executor)
 [ "$CONTINUE" -eq 1 ] && ARGS+=(-c)
 [ -n "$MODEL" ] && ARGS+=(-m "$MODEL")
-ARGS+=(-f "$BRIEF" "Implement the attached brief. Follow it exactly.")
+ARGS+=(-f "$BRIEF" -- "Implement the attached brief. Follow it exactly.")
 
 echo "dispatch: round $ROUND -> opencode ${ARGS[*]}"
 echo "dispatch: log -> $LOG"
