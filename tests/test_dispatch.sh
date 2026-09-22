@@ -99,14 +99,16 @@ fi
 
 echo "test: dispatch through command substitution does not hang or leak sleep"
 new_fixture
-# Census sleep 600 processes before (using system-wide view, not children of test script)
-before=$(pgrep -f '^sleep 600' | wc -l | tr -d ' ')
+# Census orphaned sleep 600 processes (PPID 1 only, not system-wide)
+before_pids=$(pgrep -P 1 -f '^sleep 600' | sort)
+before=$(echo "$before_pids" | wc -l | tr -d ' ')
 # Run dispatch through command substitution with default timeout
 # (would hang if watchdog holds pipe; orphan would be unmistakable sleep 600)
 OUT="$(STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md 2>&1)"
 RC=$?
 # Census after
-after=$(pgrep -f '^sleep 600' | wc -l | tr -d ' ')
+after_pids=$(pgrep -P 1 -f '^sleep 600' | sort)
+after=$(echo "$after_pids" | wc -l | tr -d ' ')
 # Check exit code
 if [ $RC -eq 0 ]; then
   echo "  PASS: command substitution completed with exit 0"; PASS=$((PASS+1))
@@ -117,7 +119,9 @@ fi
 if [ "$after" -eq "$before" ]; then
   echo "  PASS: no orphaned sleep 600 processes"; PASS=$((PASS+1))
 else
-  echo "  FAIL: orphaned sleep 600 processes found (before: $before, after: $after)"; FAIL=$((FAIL+1))
+  # Report which PIDs are new orphans
+  new_orphans=$(comm -13 <(echo "$before_pids") <(echo "$after_pids"))
+  echo "  FAIL: orphaned sleep 600 processes found (before: $before, after: $after); new PIDs: $new_orphans"; FAIL=$((FAIL+1))
 fi
 
 echo
