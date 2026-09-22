@@ -14,6 +14,9 @@ readonly EXIT_EXECUTOR=20
 readonly EXIT_TIMEOUT=24
 
 BRIEF=""; ROUND=1; MODEL=""; TIMEOUT=600; CONTINUE=0
+# A correction round re-attaches the whole brief, so without a message saying
+# otherwise the executor is told to implement all of it again.
+MESSAGE="Implement the attached brief. Follow it exactly."
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -21,6 +24,7 @@ while [ $# -gt 0 ]; do
     --round)    ROUND="$2"; shift 2 ;;
     --model)    MODEL="$2"; shift 2 ;;
     --timeout)  TIMEOUT="$2"; shift 2 ;;
+    --message)  MESSAGE="$2"; shift 2 ;;
     --continue) CONTINUE=1; shift ;;
     *) echo "dispatch: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -94,7 +98,7 @@ rm -f "$AGENTS_TMP"
 ARGS=(run --agent executor)
 [ "$CONTINUE" -eq 1 ] && ARGS+=(-c)
 [ -n "$MODEL" ] && ARGS+=(-m "$MODEL")
-ARGS+=(-f "$BRIEF" -- "Implement the attached brief. Follow it exactly.")
+ARGS+=(-f "$BRIEF" -- "$MESSAGE")
 
 echo "dispatch: round $ROUND -> opencode ${ARGS[*]}"
 echo "dispatch: base -> $(git rev-parse --short "$BASE")"

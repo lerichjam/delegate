@@ -100,6 +100,24 @@ else
   echo "  PASS: stub did not reject the message as a missing file"; PASS=$((PASS+1))
 fi
 
+echo "test: --message replaces the default instruction so a delta round says so"
+new_fixture
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 --continue \
+  --message "Apply the '## Round 2 delta' section at the end of the attached brief. Do not redo the rest." \
+  >/dev/null 2>&1
+DELTALOG="$FIX/.advisor/runs/001-test-r2.log"
+if grep -q -- "-- Apply the '## Round 2 delta' section" "$DELTALOG"; then
+  echo "  PASS: the delta message reached opencode after the -- terminator"; PASS=$((PASS+1))
+else
+  echo "  FAIL: --message did not reach opencode"; FAIL=$((FAIL+1))
+fi
+if grep -q 'Implement the attached brief' "$DELTALOG"; then
+  echo "  FAIL: the default message was sent as well -- --message must replace it"; FAIL=$((FAIL+1))
+else
+  echo "  PASS: the default 'implement it all' instruction was replaced, not appended"; PASS=$((PASS+1))
+fi
+
 echo "test: executor agent does not resolve -> 14"
 new_fixture
 STUB_NO_AGENT=1 "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
@@ -278,6 +296,23 @@ else
   new_orphans=$(comm -13 <(printf '%s\n' "$before_pids" | grep -v '^$') <(printf '%s\n' "$after_pids" | grep -v '^$'))
   echo "  FAIL: orphaned sleep 600 processes found (before: $before, after: $after); new PIDs: $new_orphans"; FAIL=$((FAIL+1))
 fi
+
+echo "test: SKILL.md documents every exit code and flag dispatch.sh implements"
+SKILL="$(dirname "$STUBDIR")/SKILL.md"
+for code in $(grep -oE '^readonly EXIT_[A-Z_]+=[0-9]+' "$DISPATCH" | grep -oE '[0-9]+$'); do
+  if grep -q "^| $code |" "$SKILL"; then
+    echo "  PASS: exit code $code is in the advisor's table"; PASS=$((PASS+1))
+  else
+    echo "  FAIL: dispatch.sh can exit $code but SKILL.md never says what it means"; FAIL=$((FAIL+1))
+  fi
+done
+for flag in $(grep -oE '^    --[a-z]+\)' "$DISPATCH" | tr -d ' )'); do
+  if grep -q -- "$flag" "$SKILL"; then
+    echo "  PASS: $flag is documented"; PASS=$((PASS+1))
+  else
+    echo "  FAIL: dispatch.sh implements $flag but SKILL.md never mentions it"; FAIL=$((FAIL+1))
+  fi
+done
 
 echo "test: the executor agent cannot run git commands that erase the diff"
 AGENT="$(dirname "$STUBDIR")/agent/executor.md"   # STUBDIR is absolute; cwd is a fixture
