@@ -31,8 +31,9 @@ This is one task, supervised, with you reading every diff.
 - `git status --porcelain` — if dirty, **stop and ask the user to commit
   or stash.** Do not work around this. A dirty tree makes the post-run
   diff unreadable, which destroys the only real verification step.
-- `mkdir -p .advisor/briefs .advisor/runs` and ensure `.advisor/runs/` is
-  in `.gitignore`.
+- `mkdir -p .advisor/briefs .advisor/runs`. Dispatch drops a
+  self-ignoring `.gitignore` into `.advisor/runs/`, so raw executor logs
+  cannot reach a commit even if the repo's own ignore rules miss them.
 
 ### 2. Reconnaissance
 
@@ -51,11 +52,31 @@ from the existing contents of `.advisor/briefs/`.
 Quality bar: could a competent engineer who has never seen this
 repository implement it from the brief alone? If not, it is not finished.
 
+Then **run every command in the Verification section yourself, against
+the unchanged tree, before dispatching.** You are not checking that it
+passes — it should not yet. You are checking that it *runs*: right path,
+right flags, right argument format, right interpreter. A Verification
+command that cannot succeed makes the executor's report and your own
+review equally meaningless, since neither of you is measuring anything.
+This has already cost a real round: a brief specified
+`--date $(date +%Y-%m-%d)` for a script that only accepts `YYYYMMDD`.
+
 ### 4. Dispatch
 
 ```
 ~/.claude/skills/delegate/bin/dispatch.sh --brief .advisor/briefs/NNN-slug.md --round 1
 ```
+
+Optional flags:
+
+- `--timeout <seconds>` — how long the executor gets. Default 600.
+- `--model <provider/model>` — override the executor agent's own model.
+- `--message <text>` — what to tell the executor about the attached
+  brief. Defaults to "Implement the attached brief. Follow it exactly.";
+  a correction round must override it (step 6).
+
+Dispatch echoes the base commit it pinned the diff to. Note it — step 5
+needs it.
 
 Interpret the exit code:
 
@@ -66,11 +87,15 @@ Interpret the exit code:
 | 11 | not a repo | back to preflight |
 | 12 | dirty tree | stop, ask the user to commit or stash |
 | 13 | brief unreadable | your bug — fix the path |
-| 20 | executor failed | read the log, then review or correct |
-| 24 | timed out | read the log; consider a smaller brief |
+| 14 | executor agent unresolved | run `~/.claude/skills/delegate/install.sh`, then retry |
+| 15 | no recorded baseline | you continued a delegation that never had a round 1; start at round 1 |
+| 20 | opencode exited nonzero | read the log: an argv or agent error means the executor never ran; otherwise review or correct |
+| 24 | timed out | read the log; raise `--timeout` first — a smaller brief is the second remedy, not the first |
+| 1 or 2 | your invocation is malformed | dispatch's own argument handling rejected it; fix the command line |
 
-Codes 10-13 mean the harness refused and nothing ran. Codes 20 and 24
-mean the attempt happened and failed.
+Codes 10-15 mean the harness refused and nothing ran. Code 24 means the
+executor was still running when the clock ran out, so the tree may hold a
+half-finished change — review it before re-dispatching.
 
 ### 5. Review — the part that matters
 
@@ -98,8 +123,15 @@ Establish what happened yourself. The executor's report is a hypothesis.
   brief.
 - **CORRECT** — the shape is right and you can name the fix. Append a
   `## Round N delta` section to the brief saying only what was wrong and
-  what to change, then dispatch again with `--round N --continue`. Do not
-  rewrite the whole brief.
+  what to change, then dispatch again. Do not rewrite the whole brief —
+  and say in the message that it is a delta, because the whole brief is
+  re-attached every round:
+
+  ```
+  ~/.claude/skills/delegate/bin/dispatch.sh --brief .advisor/briefs/NNN-slug.md \
+    --round N --continue \
+    --message "Apply the '## Round N delta' section at the end of the attached brief. Do not redo the rest."
+  ```
 - **ROLLBACK** — you would have to write "undo this and start again"
   rather than "change X to Y". Concretely: the executor chose a different
   decomposition than Architecture specified, or it touched files Context
