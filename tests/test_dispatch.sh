@@ -78,6 +78,28 @@ else
   echo "  FAIL: diff did not report the edited file"; FAIL=$((FAIL+1))
 fi
 
+echo "test: message after -f is passed as a message, not a filename"
+new_fixture
+# The real opencode CLI declares -f/--file as a yargs array option, so it
+# greedily swallows positionals after it. If dispatch.sh ever regresses to
+# putting the message right after -f with no -- terminator, the stub (which
+# mirrors that array behaviour) will reject the message text as a missing
+# file and opencode will exit nonzero before the executor is ever invoked.
+OUT="$(STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md 2>&1)"
+RC=$?
+check "dispatch succeeds with -- terminator in place" 0 $RC
+LOGFILE="$FIX/.advisor/runs/001-test-r1.log"
+if grep -q -- '-- Implement the attached brief\. Follow it exactly\.' "$LOGFILE"; then
+  echo "  PASS: message reached the stub after a -- terminator, not as a filename"; PASS=$((PASS+1))
+else
+  echo "  FAIL: message did not appear after -- in the logged invocation"; FAIL=$((FAIL+1))
+fi
+if grep -q 'File not found' "$LOGFILE"; then
+  echo "  FAIL: stub rejected the message text as a missing file"; FAIL=$((FAIL+1))
+else
+  echo "  PASS: stub did not reject the message as a missing file"; PASS=$((PASS+1))
+fi
+
 echo "test: executor failure -> 20"
 new_fixture
 STUB_EXIT=1 "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
