@@ -60,6 +60,43 @@ new_fixture
 "$DISPATCH" --brief .advisor/briefs/nope.md >/dev/null 2>&1
 check "missing brief" 13 $?
 
+echo "test: happy path logs the run and reports the executor's edit"
+new_fixture
+OUT="$(STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md 2>&1)"
+RC=$?
+check "happy path exit" 0 $RC
+# Assert consequences, not the stub's own exit code: the log must capture what
+# opencode was actually asked to do, and the diff must surface the stub's edit.
+if grep -q -- '--agent executor' "$FIX/.advisor/runs/001-test-r1.log"; then
+  echo "  PASS: log captured the invocation"; PASS=$((PASS+1))
+else
+  echo "  FAIL: log missing or did not capture the invocation"; FAIL=$((FAIL+1))
+fi
+if echo "$OUT" | grep -q 'file.txt'; then
+  echo "  PASS: diff reported the edited file"; PASS=$((PASS+1))
+else
+  echo "  FAIL: diff did not report the edited file"; FAIL=$((FAIL+1))
+fi
+
+echo "test: executor failure -> 20"
+new_fixture
+STUB_EXIT=1 "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "executor nonzero" 20 $?
+
+echo "test: timeout -> 24"
+new_fixture
+STUB_HANG=5 "$DISPATCH" --brief .advisor/briefs/001-test.md --timeout 1 >/dev/null 2>&1
+check "timeout" 24 $?
+
+echo "test: --continue passes -c to opencode"
+new_fixture
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 --continue >/dev/null 2>&1
+if grep -q -- ' -c ' "$FIX/.advisor/runs/001-test-r2.log"; then
+  echo "  PASS: -c forwarded"; PASS=$((PASS+1))
+else
+  echo "  FAIL: -c not forwarded"; FAIL=$((FAIL+1))
+fi
+
 echo
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]
