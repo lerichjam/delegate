@@ -25,8 +25,10 @@ warnings where a plausible-but-wrong approach exists.>
 match.>
 
 ## Verification
-<Exact commands, with expected outcomes.>
-- `<command>` — expect <outcome>
+<Exact commands, with expected outcomes. Name the interpreter and the
+version the command must run under — the default one on PATH is often not
+the one that works. Run each command yourself before dispatching.>
+- `<interpreter> <version>`: `<command>` — expect <outcome>
 
 ## Acceptance criteria
 <Concrete and checkable. Not "works well" — state what is observably true
