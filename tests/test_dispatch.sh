@@ -100,6 +100,16 @@ else
   echo "  PASS: stub did not reject the message as a missing file"; PASS=$((PASS+1))
 fi
 
+echo "test: executor agent does not resolve -> 14"
+new_fixture
+STUB_NO_AGENT=1 "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "unresolved executor agent" 14 $?
+if [ -e "$FIX/.advisor/runs/001-test-r1.log" ]; then
+  echo "  FAIL: dispatch ran opencode anyway -- 14 must mean nothing ran"; FAIL=$((FAIL+1))
+else
+  echo "  PASS: refused before invoking opencode run"; PASS=$((PASS+1))
+fi
+
 echo "test: executor failure -> 20"
 new_fixture
 STUB_EXIT=1 "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1

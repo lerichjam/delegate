@@ -2,10 +2,19 @@
 # Test double for `opencode`. Behaviour driven by env vars:
 #   STUB_EXIT=<n>    exit with this code (default 0)
 #   STUB_HANG=<n>    sleep n seconds before exiting (default 0)
+#   STUB_NO_AGENT=1  `agent list` omits the executor agent
 #   STUB_EDIT=<path>   append to this (tracked) file to simulate an edit
 #   STUB_CREATE=<path> create this file to simulate the executor adding a
 #                      NEW file -- invisible to `git diff`, which is the case
 #                      every STUB_EDIT-based test misses
+# `opencode agent list` is dispatch's preflight probe, not a run.
+if [ "${1:-}" = "agent" ]; then
+  echo "build (primary)"
+  echo "plan (primary)"
+  [ -z "${STUB_NO_AGENT:-}" ] && echo "executor (primary)"
+  exit 0
+fi
+
 echo "stub-opencode invoked with: $*"
 
 # Mirror the one real-CLI quirk that broke dispatch.sh in production: opencode
