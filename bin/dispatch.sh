@@ -62,8 +62,8 @@ CMD_PID=$!
 WATCHDOG_PID=$!
 
 wait "$CMD_PID"; RC=$?
-kill -TERM "$WATCHDOG_PID" 2>/dev/null
 pkill -P "$WATCHDOG_PID" >/dev/null 2>&1
+kill -TERM "$WATCHDOG_PID" 2>/dev/null
 wait "$WATCHDOG_PID" 2>/dev/null
 
 if [ "$RC" -eq 143 ]; then
