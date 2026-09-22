@@ -97,6 +97,27 @@ else
   echo "  FAIL: -c not forwarded"; FAIL=$((FAIL+1))
 fi
 
+echo "test: dispatch through command substitution does not hang or leak sleep"
+new_fixture
+# Record initial sleep processes from this script
+INITIAL_SLEEPS="$(pgrep -P $$  sleep || true | wc -l)"
+# Run dispatch through command substitution with a short timeout (would hang if watchdog holds pipe)
+OUT="$(STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md --timeout 2 2>&1)"
+RC=$?
+# Check exit code
+if [ $RC -eq 0 ]; then
+  echo "  PASS: command substitution completed with exit 0"; PASS=$((PASS+1))
+else
+  echo "  FAIL: command substitution returned $RC (expected 0)"; FAIL=$((FAIL+1))
+fi
+# Check that no sleep processes were left behind by dispatch
+FINAL_SLEEPS="$(pgrep -P $$ sleep || true | wc -l)"
+if [ "$FINAL_SLEEPS" -eq "$INITIAL_SLEEPS" ]; then
+  echo "  PASS: no orphaned sleep processes"; PASS=$((PASS+1))
+else
+  echo "  FAIL: orphaned sleep processes found"; FAIL=$((FAIL+1))
+fi
+
 echo
 echo "passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]
