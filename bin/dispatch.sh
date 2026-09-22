@@ -8,6 +8,7 @@ readonly EXIT_NO_OPENCODE=10
 readonly EXIT_NOT_REPO=11
 readonly EXIT_DIRTY=12
 readonly EXIT_NO_BRIEF=13
+readonly EXIT_NO_AGENT=14
 readonly EXIT_NO_BASE=15
 readonly EXIT_EXECUTOR=20
 readonly EXIT_TIMEOUT=24
@@ -76,6 +77,19 @@ else
   [ -n "$BASE" ] || die $EXIT_NO_BASE \
     "recorded baseline in $BASEFILE does not resolve to a commit. Start this delegation at round 1 (no --continue)."
 fi
+
+# opencode exits nonzero for an unresolved agent exactly as it does for a
+# failed task, so an unrun install.sh would otherwise arrive as EXIT_EXECUTOR
+# -- "the executor ran and failed" -- when no model call ever happened.
+# Never pipe `opencode agent list`: it emits ~1.4 MB and truncates at exactly
+# 1 MiB through a pipe, which previously made a `| grep` check false-negative.
+AGENTS_TMP="$(mktemp)"
+opencode agent list >"$AGENTS_TMP" 2>/dev/null
+if ! grep -q '^executor' "$AGENTS_TMP"; then
+  rm -f "$AGENTS_TMP"
+  die $EXIT_NO_AGENT "opencode does not resolve the 'executor' agent. Run ~/.claude/skills/delegate/install.sh, then retry."
+fi
+rm -f "$AGENTS_TMP"
 
 ARGS=(run --agent executor)
 [ "$CONTINUE" -eq 1 ] && ARGS+=(-c)
