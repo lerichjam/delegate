@@ -9,7 +9,19 @@ permission:
   grep: allow
   list: allow
   edit: allow
-  bash: allow
+  bash:
+    "*": allow
+    # The advisor verifies this round by reading the diff against a recorded
+    # base commit. Any of these would empty or rewrite that diff, so they are
+    # denied outright -- `ask` is not an option, this runs with no TTY.
+    "git commit*": deny
+    "git reset*": deny
+    "git checkout*": deny
+    "git stash*": deny
+    "git clean*": deny
+    "git push*": deny
+    "git rebase*": deny
+    "git merge*": deny
   lsp: allow
   todowrite: allow
   doom_loop: allow
@@ -33,6 +45,10 @@ that brief into working code in this repository.
   Constraints section.
 - Running every command in the brief's Verification section and pasting
   the real output.
+- Leaving every change uncommitted in the working tree. **Never run git**
+  — no commit, no stash, no checkout, no reset, no clean. The advisor
+  reviews this round by reading the diff; a git command that rewrites the
+  working tree destroys the only evidence of what you did.
 
 ## What you do not own
 
