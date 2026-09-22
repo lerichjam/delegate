@@ -112,11 +112,70 @@ check "timeout" 24 $?
 
 echo "test: --continue passes -c to opencode"
 new_fixture
+# Round 1 first: a continuation needs the baseline commit round 1 records.
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
 STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 --continue >/dev/null 2>&1
 if grep -q -- ' -c ' "$FIX/.advisor/runs/001-test-r2.log"; then
   echo "  PASS: -c forwarded"; PASS=$((PASS+1))
 else
   echo "  FAIL: -c not forwarded"; FAIL=$((FAIL+1))
+fi
+
+echo "test: a correction round runs on the tree round 1 dirtied, but a new round 1 still refuses"
+new_fixture
+# Round 1 on a clean tree. The stub edits a tracked file, so afterwards the
+# tree is necessarily dirty -- which is the whole point: before the BASE fix,
+# every correction round died in preflight with 12 and the CORRECT verdict
+# was unreachable.
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "round 1 on a clean tree" 0 $?
+# Guard against a vacuous test: if the round left the tree clean, the next
+# assertion would pass for the wrong reason.
+if [ -n "$(git status --porcelain | grep -v '\.advisor/')" ]; then
+  echo "  PASS: round 1 left the tree dirty (precondition for the next check)"; PASS=$((PASS+1))
+else
+  echo "  FAIL: round 1 left the tree clean -- the continuation check below proves nothing"; FAIL=$((FAIL+1))
+fi
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 --continue >/dev/null 2>&1
+check "continuation round on a dirty tree" 0 $?
+# Starting a fresh delegation on that same dirty tree must still be refused:
+# the fix relaxes nothing about beginning a round-1 run.
+"$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "new round 1 on the dirty tree still refused" 12 $?
+
+echo "test: continuation with no recorded baseline -> 15"
+new_fixture
+# No round 1 was ever run here, so .advisor/runs/001-test-base does not exist.
+"$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 --continue >/dev/null 2>&1
+check "continuation without a recorded base" 15 $?
+
+echo "test: the diff is pinned to the recorded base, not to the working tree"
+new_fixture
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+# Stage round 1's change. A bare `git diff` now shows nothing at all, so a
+# diff that is not pinned to BASE would hide the work under review.
+git add -A
+OUT="$(STUB_EXIT=0 "$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 --continue 2>&1)"
+if [ -z "$(git --no-pager diff --stat)" ]; then
+  echo "  PASS: unpinned 'git diff' is empty here (precondition)"; PASS=$((PASS+1))
+else
+  echo "  FAIL: unpinned 'git diff' is non-empty -- this test cannot discriminate"; FAIL=$((FAIL+1))
+fi
+if echo "$OUT" | grep -q 'file.txt'; then
+  echo "  PASS: diff against BASE still shows the staged round-1 change"; PASS=$((PASS+1))
+else
+  echo "  FAIL: diff lost the staged round-1 change"; FAIL=$((FAIL+1))
+fi
+
+echo "test: .advisor/runs ignores itself so logs cannot be committed"
+new_fixture
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+rm -f .gitignore   # remove the repo-level ignore; the runs dir must stand alone
+git add -A >/dev/null 2>&1
+if git diff --cached --name-only | grep -q '\.advisor/runs/'; then
+  echo "  FAIL: 'git add -A' staged a raw executor log"; FAIL=$((FAIL+1))
+else
+  echo "  PASS: 'git add -A' could not stage anything under .advisor/runs"; PASS=$((PASS+1))
 fi
 
 echo "test: dispatch through command substitution does not hang or leak sleep"
