@@ -41,5 +41,41 @@ DIRTY="$(git status --porcelain | grep -v '\.advisor/' || true)"
 [ -r "$BRIEF" ] \
   || die $EXIT_NO_BRIEF "brief not readable: ${BRIEF:-<none>}"
 
-echo "dispatch: preflight OK (round $ROUND, brief $BRIEF)"
+BRIEF_STEM="$(basename "$BRIEF" .md)"
+RUNDIR="$(git rev-parse --show-toplevel)/.advisor/runs"
+mkdir -p "$RUNDIR"
+LOG="$RUNDIR/${BRIEF_STEM}-r${ROUND}.log"
+
+ARGS=(run --agent executor)
+[ "$CONTINUE" -eq 1 ] && ARGS+=(-c)
+[ -n "$MODEL" ] && ARGS+=(-m "$MODEL")
+ARGS+=(-f "$BRIEF" "Implement the attached brief. Follow it exactly.")
+
+echo "dispatch: round $ROUND -> opencode ${ARGS[*]}"
+echo "dispatch: log -> $LOG"
+
+# macOS ships no timeout(1), so run the command in the background and let a
+# watchdog subshell kill it. A TERM-killed child reports 143.
+opencode "${ARGS[@]}" >"$LOG" 2>&1 &
+CMD_PID=$!
+( sleep "$TIMEOUT"; kill -TERM "$CMD_PID" 2>/dev/null ) &
+WATCHDOG_PID=$!
+
+wait "$CMD_PID"; RC=$?
+kill -9 "$WATCHDOG_PID" 2>/dev/null
+
+if [ "$RC" -eq 143 ]; then
+  echo "dispatch: timed out after ${TIMEOUT}s" >&2
+  exit $EXIT_TIMEOUT
+fi
+
+if [ "$RC" -ne 0 ]; then
+  echo "dispatch: opencode exited $RC — see $LOG" >&2
+  exit $EXIT_EXECUTOR
+fi
+
+echo
+echo "=== diff --stat ==="
+git --no-pager diff --stat
+echo "=== end ==="
 exit $EXIT_OK
