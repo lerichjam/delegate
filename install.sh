@@ -12,9 +12,13 @@ ln -sf "$SRC/command/delegate.md"  ~/.claude/commands/delegate.md
 echo "linked:"
 ls -l ~/.config/opencode/agent/executor.md ~/.claude/commands/delegate.md
 
-if opencode agent list 2>/dev/null | grep -q '^executor'; then
+tmp="$(mktemp)"
+opencode agent list >"$tmp" 2>/dev/null
+if grep -q '^executor' "$tmp"; then
   echo "OK: opencode resolves the 'executor' agent"
+  rm -f "$tmp"
 else
   echo "WARN: opencode does not list 'executor' — check the frontmatter" >&2
+  rm -f "$tmp"
   exit 1
 fi
