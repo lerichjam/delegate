@@ -9,6 +9,8 @@
 #   STUB_CREATE=<path> create this file to simulate the executor adding a
 #                      NEW file -- invisible to `git diff`, which is the case
 #                      every STUB_EDIT-based test misses
+#   STUB_RUN=<cmd>     eval this shell command last, as an executor's own
+#                      bash call would -- e.g. a git command it should not run
 # `opencode agent list` is dispatch's preflight probe, not a run.
 if [ "${1:-}" = "agent" ]; then
   echo "build (primary)"
@@ -49,5 +51,9 @@ if [ -n "${STUB_CHILD:-}" ]; then
 fi
 [ "${STUB_HANG:-0}" -gt 0 ] && sleep "${STUB_HANG}"
 [ -n "${STUB_EDIT:-}" ] && echo "edited by stub" >> "${STUB_EDIT}"
-[ -n "${STUB_CREATE:-}" ] && printf 'created by stub\n' > "${STUB_CREATE}"
+if [ -n "${STUB_CREATE:-}" ]; then
+  mkdir -p "$(dirname "${STUB_CREATE}")"
+  printf 'created by stub\n' > "${STUB_CREATE}"
+fi
+[ -n "${STUB_RUN:-}" ] && eval "${STUB_RUN}" >/dev/null 2>&1
 exit "${STUB_EXIT:-0}"
