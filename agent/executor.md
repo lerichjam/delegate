@@ -14,9 +14,13 @@ permission:
     # The advisor verifies this round by reading the diff against a recorded
     # base commit. Any of these would empty or rewrite that diff, so they are
     # denied outright -- `ask` is not an option, this runs with no TTY.
+    # Patterns match the command's prefix, so a wrapped command (sh -c ...)
+    # gets past them; dispatch.sh's ref check after the round catches that.
     "git commit*": deny
     "git reset*": deny
     "git checkout*": deny
+    "git restore*": deny
+    "git switch*": deny
     "git stash*": deny
     "git clean*": deny
     "git push*": deny
@@ -46,9 +50,9 @@ that brief into working code in this repository.
 - Running every command in the brief's Verification section and pasting
   the real output.
 - Leaving every change uncommitted in the working tree. **Never run git**
-  — no commit, no stash, no checkout, no reset, no clean. The advisor
-  reviews this round by reading the diff; a git command that rewrites the
-  working tree destroys the only evidence of what you did.
+  — no commit, no stash, no checkout, no restore, no reset, no clean.
+  The advisor reviews this round by reading the diff; a git command that
+  rewrites the working tree destroys the only evidence of what you did.
 
 ## What you do not own
 

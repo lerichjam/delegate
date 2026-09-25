@@ -2,7 +2,9 @@
 # Plain-bash test suite for dispatch.sh. No bats on this machine.
 set -uo pipefail
 
-DISPATCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/dispatch.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DISPATCH="$ROOT/bin/dispatch.sh"
+ROLLBACK="$ROOT/bin/rollback.sh"
 STUBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PASS=0; FAIL=0
 
@@ -13,6 +15,28 @@ check() { # check <name> <expected-code> <actual-code>
     echo "  FAIL: $1 (expected $2, got $3)"; FAIL=$((FAIL+1))
   fi
 }
+
+# assert <description> <command...> -- PASS when the command succeeds.
+assert() {
+  local desc="$1"; shift
+  if "$@"; then
+    echo "  PASS: $desc"; PASS=$((PASS+1))
+  else
+    echo "  FAIL: $desc"; FAIL=$((FAIL+1))
+  fi
+}
+# refute <description> <command...> -- PASS when the command fails.
+refute() {
+  local desc="$1"; shift
+  if "$@"; then
+    echo "  FAIL: $desc"; FAIL=$((FAIL+1))
+  else
+    echo "  PASS: $desc"; PASS=$((PASS+1))
+  fi
+}
+# section <output> <header-prefix> -- the lines of one dispatch report section.
+section() { printf '%s\n' "$1" | sed -n "/^=== $2/,/^=== /p" | sed '1d;$d'; }
+lists() { printf '%s\n' "$1" | grep -qx -- "$2"; }
 
 # Each test runs in a fresh temp git repo with the stub first on PATH.
 new_fixture() {
@@ -237,8 +261,8 @@ check "create-only round exits 0" 0 $?
 # whole defect: an advisor reading only the diff sees nothing. If this ever
 # starts failing because git learned to show untracked files in a diff, the
 # assertion below stops proving anything and must be revisited.
-DIFF_PART="$(printf '%s\n' "$OUT" | sed -n '/=== diff --stat/,/=== untracked/p')"
-UNTRACKED_PART="$(printf '%s\n' "$OUT" | sed -n '/=== untracked/,/=== end ===/p')"
+DIFF_PART="$(section "$OUT" 'diff --stat')"
+UNTRACKED_PART="$(section "$OUT" 'new files')"
 if printf '%s\n' "$DIFF_PART" | grep -q 'created.txt'; then
   echo "  FAIL: diff section named the new file -- this test no longer discriminates"; FAIL=$((FAIL+1))
 else
@@ -250,11 +274,11 @@ else
   echo "  FAIL: created file appeared nowhere in dispatch's output"; FAIL=$((FAIL+1))
 fi
 
-echo "test: no new files -> untracked section says (none), and never lists .advisor/"
+echo "test: no new files -> new-files section says (none), and never lists the advisor's brief"
 new_fixture
 echo "new brief" > .advisor/briefs/002-new.md
 OUT="$(STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/002-new.md 2>&1)"
-UNTRACKED_PART="$(printf '%s\n' "$OUT" | sed -n '/=== untracked/,/=== end ===/p')"
+UNTRACKED_PART="$(section "$OUT" 'new files')"
 if printf '%s\n' "$UNTRACKED_PART" | grep -q '(none)'; then
   echo "  PASS: reports (none) when the executor created nothing"; PASS=$((PASS+1))
 else
@@ -297,20 +321,142 @@ else
   echo "  FAIL: orphaned sleep 600 processes found (before: $before, after: $after); new PIDs: $new_orphans"; FAIL=$((FAIL+1))
 fi
 
-echo "test: SKILL.md documents every exit code and flag dispatch.sh implements"
+echo "test: a repository with no commits -> 16, distinct from 'not a repo'"
+EMPTY="$(mktemp -d)"; cd "$EMPTY"; git init -q
+mkdir -p .advisor/briefs; echo x > .advisor/briefs/001-test.md
+"$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "no commits" 16 $?
+
+echo "test: --continue on round 1, or a non-numeric round, is a malformed invocation -> 2"
+new_fixture
+"$DISPATCH" --brief .advisor/briefs/001-test.md --round 1 --continue >/dev/null 2>&1
+check "--continue with --round 1" 2 $?
+"$DISPATCH" --brief .advisor/briefs/001-test.md --round two >/dev/null 2>&1
+check "--round two" 2 $?
+
+echo "test: a later round WITHOUT --continue is a fresh start, so it refuses a dirty tree"
+new_fixture
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+"$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 >/dev/null 2>&1
+check "--round 2 alone on round 1's dirty tree" 12 $?
+if grep -q -- ' -c ' "$FIX/.advisor/runs/001-test-r2.log" 2>/dev/null; then
+  echo "  FAIL: a fresh round resumed the executor's session"; FAIL=$((FAIL+1))
+else
+  echo "  PASS: a fresh round did not pass -c"; PASS=$((PASS+1))
+fi
+
+echo "test: the executor moving a ref trips the wire -> 21, whatever the deny list missed"
+new_fixture
+# `sh -c` wraps the command, which is exactly what a prefix-anchored deny
+# pattern cannot see. The check that catches it must be after the fact.
+ERRFILE="$(mktemp)"
+STUB_EDIT="$FIX/file.txt" STUB_RUN='sh -c "git commit -qam sneaky"' \
+  "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>"$ERRFILE"
+check "wrapped git commit" 21 $?
+assert "the refusal names the moved ref" grep -q "refs/heads/" "$ERRFILE"
+new_fixture
+STUB_RUN='git tag sneaky' "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "git tag" 21 $?
+new_fixture
+# Negative control: staging touches no ref, and the diff is pinned to the
+# base, so it hides nothing. The wire must not trip on it.
+STUB_EDIT="$FIX/file.txt" STUB_RUN='git add -A' \
+  "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "git add alone does not trip the wire" 0 $?
+
+echo "test: a file the executor creates under .advisor/ is reported like any other"
+new_fixture
+OUT="$(STUB_CREATE="$FIX/.advisor/notes.md" "$DISPATCH" --brief .advisor/briefs/001-test.md 2>&1)"
+assert ".advisor/notes.md is listed as new" lists "$(section "$OUT" 'new files')" '.advisor/notes.md'
+
+echo "test: the executor editing the advisor's untracked brief is reported"
+new_fixture
+echo "new brief" > .advisor/briefs/002-new.md
+OUT="$(STUB_EDIT="$FIX/.advisor/briefs/002-new.md" "$DISPATCH" --brief .advisor/briefs/002-new.md 2>&1)"
+assert "the brief is listed as changed" lists "$(section "$OUT" 'pre-existing')" 'changed: .advisor/briefs/002-new.md'
+assert "and not as new" [ "$(section "$OUT" 'new files')" = "(none)" ]
+
+echo "test: new files accumulate across rounds, and a user's file dropped between rounds is not one"
+new_fixture
+STUB_CREATE="$FIX/a.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+echo "mine" > scratch.txt
+OUT="$(STUB_CREATE="$FIX/b.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 --continue 2>&1)"
+NEW="$(section "$OUT" 'new files')"
+assert "round 1's file is still reported on round 2" lists "$NEW" 'a.txt'
+assert "round 2's file is reported" lists "$NEW" 'b.txt'
+refute "the user's scratch file is not attributed to the executor" lists "$NEW" 'scratch.txt'
+OUT="$(STUB_EDIT="$FIX/a.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md --round 3 --continue 2>&1)"
+assert "editing its own earlier file is not reported as pre-existing" \
+  [ "$(section "$OUT" 'pre-existing')" = "(none)" ]
+
+echo "test: rollback undoes the executor's work and nothing else"
+new_fixture
+STUB_EDIT="$FIX/file.txt" STUB_CREATE="$FIX/new/dir/x.txt" \
+  "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+echo "mine" > scratch.txt
+echo "draft" > .advisor/briefs/002-next.md
+"$ROLLBACK" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "rollback exit" 0 $?
+assert "the tracked edit is reverted" [ "$(cat file.txt)" = "baseline" ]
+assert "the executor's file is deleted" [ ! -e new/dir/x.txt ]
+assert "the directories it created are removed" [ ! -e new ]
+assert "the user's untracked file survives" [ -f scratch.txt ]
+assert "the advisor's untracked brief survives" [ -f .advisor/briefs/002-next.md ]
+
+echo "test: rollback removes a new file the executor staged"
+new_fixture
+STUB_CREATE="$FIX/staged.txt" STUB_RUN='git add -A' \
+  "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+assert "precondition: the executor staged its file" git ls-files --error-unmatch staged.txt >/dev/null 2>&1
+"$ROLLBACK" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+assert "the staged file is gone" [ ! -e staged.txt ]
+assert "the index matches the base again" git diff --cached --quiet
+
+echo "test: rollback deletes only what is untracked inside the repo, whatever the ledger says"
+new_fixture
+STUB_CREATE="$FIX/x.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+OUTSIDE="$(mktemp -d)/victim.txt"; echo keep > "$OUTSIDE"
+# The ledger lives in a directory the executor can write to. A forged entry
+# must not turn rollback into a delete-anything primitive.
+printf '%s\nfile.txt\n' "$OUTSIDE" >> .advisor/runs/001-test-created
+"$ROLLBACK" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+assert "a path outside the repo survives" [ -f "$OUTSIDE" ]
+assert "a tracked file named in the ledger is restored, not deleted" [ -f file.txt ]
+assert "the genuine new file is still deleted" [ ! -e x.txt ]
+
+echo "test: rollback refuses without a baseline -> 15, and when HEAD has moved -> 21"
+new_fixture
+"$ROLLBACK" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "rollback with no recorded base" 15 $?
+new_fixture
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+git commit -qam "someone committed mid-delegation"
+"$ROLLBACK" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "rollback after HEAD moved" 21 $?
+assert "and it changed nothing" grep -q 'edited by stub' file.txt
+
+echo "test: a fresh round after rollback starts a fresh ledger"
+new_fixture
+STUB_CREATE="$FIX/old.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+"$ROLLBACK" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+OUT="$(STUB_CREATE="$FIX/fresh.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 2>&1)"
+check "fresh round 2 on the rolled-back tree" 0 $?
+assert "only this attempt's file is reported" [ "$(section "$OUT" 'new files')" = "fresh.txt" ]
+
+echo "test: SKILL.md documents every exit code and flag the scripts implement"
 SKILL="$(dirname "$STUBDIR")/SKILL.md"
-for code in $(grep -oE '^readonly EXIT_[A-Z_]+=[0-9]+' "$DISPATCH" | grep -oE '[0-9]+$'); do
+for code in $(grep -oE '^readonly EXIT_[A-Z_]+=[0-9]+' "$ROOT/bin/lib.sh" | grep -oE '[0-9]+$'); do
   if grep -q "^| $code |" "$SKILL"; then
     echo "  PASS: exit code $code is in the advisor's table"; PASS=$((PASS+1))
   else
-    echo "  FAIL: dispatch.sh can exit $code but SKILL.md never says what it means"; FAIL=$((FAIL+1))
+    echo "  FAIL: the scripts can exit $code but SKILL.md never says what it means"; FAIL=$((FAIL+1))
   fi
 done
-for flag in $(grep -oE '^    --[a-z]+\)' "$DISPATCH" | tr -d ' )'); do
+for flag in $(cat "$DISPATCH" "$ROLLBACK" | grep -oE '^    --[a-z]+\)' | tr -d ' )' | sort -u); do
   if grep -q -- "$flag" "$SKILL"; then
     echo "  PASS: $flag is documented"; PASS=$((PASS+1))
   else
-    echo "  FAIL: dispatch.sh implements $flag but SKILL.md never mentions it"; FAIL=$((FAIL+1))
+    echo "  FAIL: the scripts implement $flag but SKILL.md never mentions it"; FAIL=$((FAIL+1))
   fi
 done
 
@@ -318,7 +464,7 @@ echo "test: the executor agent cannot run git commands that erase the diff"
 AGENT="$(dirname "$STUBDIR")/agent/executor.md"   # STUBDIR is absolute; cwd is a fixture
 # The advisor's whole verification is reading the diff. An executor that can
 # commit, stash, checkout or reset empties that diff before the advisor looks.
-for pat in 'git commit\*' 'git reset\*' 'git checkout\*' 'git stash\*' 'git clean\*' 'git push\*'; do
+for pat in 'git commit\*' 'git reset\*' 'git checkout\*' 'git restore\*' 'git switch\*' 'git stash\*' 'git clean\*' 'git push\*'; do
   if grep -qE "^ +\"$pat\": *deny" "$AGENT"; then
     echo "  PASS: ${pat%\\*} denied"; PASS=$((PASS+1))
   else
