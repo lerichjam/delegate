@@ -1,55 +1,141 @@
 #!/usr/bin/env bash
-# Test double for `opencode`. Behaviour driven by env vars:
-#   STUB_EXIT=<n>    exit with this code (default 0)
-#   STUB_HANG=<n>    sleep n seconds before exiting (default 0)
-#   STUB_CHILD=<n>   spawn a background `sleep n` first, standing in for the
-#                    subprocesses a real executor leaves running
-#   STUB_NO_AGENT=1  `agent list` omits the executor agent
+# Test double for OpenCode 1.x and 2.x. STUB_VERSION selects the major: a version
+# starting with "1." runs the 1.x CLI, anything else the 2.x CLI. Each was
+# observed on the real binary. Behaviour driven by env vars:
+#   STUB_LOG=<file>    append every invocation's arguments to this file
+#   STUB_VERSION=<s>   what `--version` prints (default: opencode v2.0.27; 1.x
+#                      prints a bare number, e.g. 1.18.21)
+#   STUB_EXIT=<n>      exit with this code after the run (default 0)
+#   STUB_HANG=<n>      sleep n seconds before exiting (default 0)
+#   STUB_CHILD=<n>     spawn a background `sleep n` first, standing in for the
+#                      subprocesses a real executor leaves running
+#   STUB_CHILD_PIDFILE=<file>  where to write that child's pid
+#   STUB_CHILD_NEWGROUP=1  make that child leave the process group (setsid)
+#   STUB_AGENT_LIST_ERROR=<msg>  1.x: `agent list` fails with this error
+#   STUB_NO_AGENT=1    the executor agent does not resolve: `run` fails with
+#                      OpenCode's own "Agent not found" error, before any model call
+#   STUB_NO_MODEL=<id> `models` omits this id, and `run -m <id>` says unavailable
 #   STUB_EDIT=<path>   append to this (tracked) file to simulate an edit
-#   STUB_CREATE=<path> create this file to simulate the executor adding a
-#                      NEW file -- invisible to `git diff`, which is the case
-#                      every STUB_EDIT-based test misses
-#   STUB_RUN=<cmd>     eval this shell command last, as an executor's own
-#                      bash call would -- e.g. a git command it should not run
-# `opencode agent list` is dispatch's preflight probe, not a run.
-if [ "${1:-}" = "agent" ]; then
-  echo "build (primary)"
-  echo "plan (primary)"
-  [ -z "${STUB_NO_AGENT:-}" ] && echo "executor (primary)"
+#   STUB_CREATE=<path> create this file to simulate the executor adding a NEW
+#                      file -- invisible to `git diff`
+#   STUB_RUN=<cmd>     eval this shell command last, as an executor's own bash
+#                      call would -- e.g. a git command it should not run
+#
+# What each major enforces, because dispatch depends on it:
+#   2.x: `agent list` is not a command. `-f` takes one value. `--session` must be a
+#        `ses`-prefixed id. `--standalone` is accepted.
+#   1.x: `agent list` works. `--standalone` and `--session` are unknown flags, and
+#        `-f` is an array: positionals after it are files until `--`.
+ORIG_ARGS="$*"
+[ -n "${STUB_LOG:-}" ] && printf '%s\n' "$ORIG_ARGS" >> "$STUB_LOG"
+MAJOR=2
+case "${STUB_VERSION:-opencode v2.0.27}" in 1.*) MAJOR=1 ;; esac
+
+if [ "${1:-}" = "--version" ]; then
+  echo "${STUB_VERSION:-opencode v2.0.27}"
   exit 0
 fi
 
-echo "stub-opencode invoked with: $*"
+if [ "${1:-}" = "models" ]; then
+  for id in opencode-go/deepseek-v4.1-flash opencode-go/deepseek-v4-pro; do
+    [ "$id" = "${STUB_NO_MODEL:-}" ] || echo "$id"
+  done
+  exit 0
+fi
 
-# Mirror the one real-CLI quirk that broke dispatch.sh in production: opencode
-# run's -f/--file is a yargs *array* option, so it greedily swallows every
-# positional argument that follows it, up to the next flag or a `--`
-# terminator. Any argument in that span that is not an existing file is a
-# hard error in the real CLI, so this stub must reproduce that or it cannot
-# catch the class of bug that shipped (message text parsed as a filename).
-collecting=0
-for arg in "$@"; do
-  if [ "$collecting" -eq 1 ]; then
-    if [ "$arg" = "--" ]; then
-      collecting=0
+if [ "${1:-}" = "agent" ]; then
+  if [ "$MAJOR" -eq 1 ] && [ "${2:-}" = "list" ] && [ -n "${STUB_AGENT_LIST_ERROR:-}" ]; then
+    echo "Error: ${STUB_AGENT_LIST_ERROR}"; exit 1
+  fi
+  if [ "$MAJOR" -eq 1 ] && [ "${2:-}" = "list" ]; then
+    echo "build (primary)"
+    echo "plan (primary)"
+    [ -z "${STUB_NO_AGENT:-}" ] && echo "executor (primary)"
+    exit 0
+  fi
+  echo "ERROR" >&2
+  echo "  Unexpected positional argument: \"${2:-}\"" >&2
+  exit 1
+fi
+
+if [ "${1:-}" != "run" ]; then
+  echo "stub-opencode: only 'run', 'models' and '--version' are modelled" >&2
+  exit 1
+fi
+shift
+
+# 1.x: -f is an array, so every positional after it is a file until `--`.
+# A message that lands there is not an existing file, and OpenCode refuses.
+if [ "$MAJOR" -eq 1 ]; then
+  collecting=0
+  for arg in "$@"; do
+    if [ "$collecting" -eq 1 ]; then
+      [ "$arg" = "--" ] && { collecting=0; continue; }
+      [ -e "$arg" ] || { echo "Error: File not found: $arg"; exit 20; }
       continue
     fi
-    if [ ! -e "$arg" ]; then
-      echo "Error: File not found: $arg" >&2
-      exit 20
-    fi
-    continue
-  fi
-  if [ "$arg" = "-f" ] || [ "$arg" = "--file" ]; then
-    collecting=1
-  fi
+    { [ "$arg" = "-f" ] || [ "$arg" = "--file" ]; } && collecting=1
+  done
+fi
+
+AGENT=""; SESSION=""; MODEL_ID=""; FILE=""; MSG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --standalone|--session|-s)
+      if [ "$MAJOR" -eq 1 ]; then echo "Unknown argument: $1"; exit 1; fi
+      [ "$1" = "--standalone" ] || { SESSION="$2"; shift; } ;;
+    -c|--continue) ;;
+    --agent)            AGENT="$2"; shift ;;
+    --session|-s)       SESSION="$2"; shift ;;
+    -m|--model)         MODEL_ID="$2"; shift ;;
+    -f|--file)          FILE="$2"; shift ;;
+    --)                 shift; MSG="$*"; break ;;
+    *)                  MSG="$*"; break ;;
+  esac
+  shift
 done
 
-if [ -n "${STUB_CHILD:-}" ]; then
+echo "stub-opencode invoked with: $ORIG_ARGS"
+
+if [ "$AGENT" != "build" ] && [ "$AGENT" != "plan" ] && [ "$AGENT" != "executor" ]; then
+  echo "Error: Agent not found: \"$AGENT\""
+  exit 1
+fi
+if [ "$AGENT" = "executor" ] && [ -n "${STUB_NO_AGENT:-}" ]; then
+  echo "Error: Agent not found: \"executor\""
+  exit 1
+fi
+if [ -n "$MODEL_ID" ]; then
+  case "$MODEL_ID" in
+    opencode-go/deepseek-v4.1-flash|opencode-go/deepseek-v4-pro)
+      [ "$MODEL_ID" = "${STUB_NO_MODEL:-}" ] && { echo "Error: Model unavailable: $MODEL_ID"; exit 1; } ;;
+    *) echo "Error: Model unavailable: $MODEL_ID"; exit 1 ;;
+  esac
+fi
+if [ -n "$SESSION" ] && [ "$MAJOR" -eq 2 ]; then
+  case "$SESSION" in
+    ses*) ;;
+    *) echo "Error: Expected a string starting with \"ses\""; exit 1 ;;
+  esac
+fi
+if [ -n "$FILE" ] && [ ! -e "$FILE" ]; then
+  echo "Error: File not found: $FILE"
+  exit 1
+fi
+
+if [ -n "${STUB_CHILD:-}" ] && [ -n "${STUB_CHILD_NEWGROUP:-}" ]; then
+  # A child that leaves the process group, as an executor's shell command can.
+  perl -MPOSIX -e 'POSIX::setsid(); exec "sleep", @ARGV' "${STUB_CHILD}" &
+  [ -n "${STUB_CHILD_PIDFILE:-}" ] && echo $! > "${STUB_CHILD_PIDFILE}"
+elif [ -n "${STUB_CHILD:-}" ]; then
   sleep "${STUB_CHILD}" &
   [ -n "${STUB_CHILD_PIDFILE:-}" ] && echo $! > "${STUB_CHILD_PIDFILE}"
 fi
-[ "${STUB_HANG:-0}" -gt 0 ] && sleep "${STUB_HANG}"
+[ -n "${STUB_PROBLEM:-}" ] && echo "BRIEF PROBLEM: ${STUB_PROBLEM}"
+# The real CLI exits 130 on SIGTERM, not 143. STUB_TERM_EXIT reproduces that,
+# and `wait` makes the trap run at once rather than after the sleep.
+[ -n "${STUB_TERM_EXIT:-}" ] && trap "exit ${STUB_TERM_EXIT}" TERM
+if [ "${STUB_HANG:-0}" -gt 0 ]; then sleep "${STUB_HANG}" & wait $!; fi
 [ -n "${STUB_EDIT:-}" ] && echo "edited by stub" >> "${STUB_EDIT}"
 if [ -n "${STUB_CREATE:-}" ]; then
   mkdir -p "$(dirname "${STUB_CREATE}")"

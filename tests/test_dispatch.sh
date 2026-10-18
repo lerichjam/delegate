@@ -7,6 +7,12 @@ DISPATCH="$ROOT/bin/dispatch.sh"
 ROLLBACK="$ROOT/bin/rollback.sh"
 STUBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PASS=0; FAIL=0
+# OC_TEST_MAJOR selects the OpenCode major the stub plays: 1 or 2 (default 2).
+# Checks that only one major has are guarded on $MAJOR, so the whole suite runs
+# under each.
+MAJOR="${OC_TEST_MAJOR:-2}"
+if [ "$MAJOR" = 1 ]; then export STUB_VERSION="1.18.21"; else export STUB_VERSION="opencode v2.0.27"; fi
+echo "suite: OpenCode major $MAJOR"
 
 check() { # check <name> <expected-code> <actual-code>
   if [ "$2" = "$3" ]; then
@@ -60,6 +66,69 @@ echo "test: opencode missing -> 10"
 new_fixture
 PATH="/usr/bin:/bin" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
 check "missing opencode" 10 $?
+
+echo "test: OPENCODE_BIN selects the binary, even when it is not on PATH"
+new_fixture
+OPENCODE_BIN="$STUBDIR/no-such-opencode" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "OPENCODE_BIN names a missing binary" 10 $?
+new_fixture
+OPENCODE_BIN="$STUBDIR/stub-opencode" PATH="/usr/bin:/bin" STUB_EDIT="$FIX/file.txt" \
+  "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "OPENCODE_BIN runs the named binary off PATH" 0 $?
+
+echo "test: an OpenCode that is neither 1.x nor 2.x is refused -> 18, before anything runs"
+new_fixture
+ARGLOG="$(mktemp)"
+STUB_VERSION="opencode v3.0.0" STUB_LOG="$ARGLOG" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "unsupported major" 18 $?
+refute "no run was attempted on it" grep -q '^run ' "$ARGLOG"
+
+echo "test: the preflight is per major: 1.x asks agent list and runs in-process; 2.x never asks and runs standalone"
+new_fixture
+ARGLOG="$(mktemp)"
+STUB_LOG="$ARGLOG" STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+if [ "$MAJOR" = 1 ]; then
+  assert "1.x: agent list ran before the run" grep -q '^agent list' "$ARGLOG"
+  refute "1.x: the run is not standalone (no such flag)" grep -q -- '--standalone' "$ARGLOG"
+else
+  refute "2.x: no 'agent' subcommand was invoked" grep -q '^agent' "$ARGLOG"
+  assert "2.x: the run is standalone, with the executor agent" grep -q '^run --agent executor --standalone' "$ARGLOG"
+fi
+
+if [ "$MAJOR" = 2 ]; then
+echo "test: a continuation with no recorded session -> 15, and never guesses one"
+new_fixture
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+rm -f "$FIX/.advisor/runs/001-test-session"
+"$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 --continue >/dev/null 2>&1
+check "continuation without a session" 15 $?
+
+echo "test: rollback forgets the session, so a continuation cannot resume undone work"
+new_fixture
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+"$ROLLBACK" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+"$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 --continue >/dev/null 2>&1
+check "continuation after rollback" 15 $?
+fi
+
+echo "test: dispatch runs from the repository root whatever directory it is called from"
+new_fixture
+mkdir -p sub && cd sub
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief ../.advisor/briefs/001-test.md >/dev/null 2>&1
+check "dispatch from a subdirectory with a relative brief" 0 $?
+cd "$FIX"
+assert "the brief reaches opencode as an absolute path" \
+  grep -q -- "-f $FIX/.advisor/briefs/001-test.md" "$FIX/.advisor/runs/001-test-r1.log"
+
+echo "test: install.sh links the files and reports whether the executor resolves"
+INSTALL="$ROOT/install.sh"
+H_OK="$(mktemp -d)"
+HOME="$H_OK" OPENCODE_BIN="$STUBDIR/stub-opencode" "$INSTALL" >/dev/null 2>&1
+check "install with a resolvable executor" 0 $?
+assert "the agent file is linked into the global config" [ -L "$H_OK/.config/opencode/agent/executor.md" ]
+H_BAD="$(mktemp -d)"
+HOME="$H_BAD" OPENCODE_BIN="$STUBDIR/stub-opencode" STUB_NO_AGENT=1 "$INSTALL" >/dev/null 2>&1
+check "install when the executor does not resolve" 1 $?
 
 echo "test: not a git repo -> 11"
 NOREPO="$(mktemp -d)"; cd "$NOREPO"
@@ -142,25 +211,50 @@ else
   echo "  PASS: the default 'implement it all' instruction was replaced, not appended"; PASS=$((PASS+1))
 fi
 
-echo "test: executor agent does not resolve -> 14"
+if [ "$MAJOR" = 1 ]; then
+echo "test: 1.x: a failing 'agent list' is refused -> 14, and the refusal names OpenCode's error"
 new_fixture
-STUB_NO_AGENT=1 "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
-check "unresolved executor agent" 14 $?
-if [ -e "$FIX/.advisor/runs/001-test-r1.log" ]; then
-  echo "  FAIL: dispatch ran opencode anyway -- 14 must mean nothing ran"; FAIL=$((FAIL+1))
-else
-  echo "  PASS: refused before invoking opencode run"; PASS=$((PASS+1))
+ERRFILE="$(mktemp)"
+STUB_AGENT_LIST_ERROR="no such column: project_id" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>"$ERRFILE"
+check "agent list fails" 14 $?
+assert "the message carries the error, not just 'not resolved'" grep -q 'no such column' "$ERRFILE"
 fi
+
+echo "test: executor agent does not resolve -> 14, and nothing was edited"
+new_fixture
+STUB_NO_AGENT=1 STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "unresolved executor agent" 14 $?
+# OpenCode resolves the agent before it calls a model, so the refusal comes
+# from the run's own log. The stub's edit runs after resolution: if it
+# happened, the agent was never really refused.
+if [ "$MAJOR" = 2 ]; then
+  assert "the log names the missing agent" grep -q 'Agent not found: "executor"' "$FIX/.advisor/runs/001-test-r1.log"
+else
+  refute "1.x refuses in the preflight, so no run log exists" [ -e "$FIX/.advisor/runs/001-test-r1.log" ]
+fi
+refute "the stub's edit never landed, so the executor never ran" grep -q 'edited by stub' "$FIX/file.txt"
 
 echo "test: executor failure -> 20"
 new_fixture
 STUB_EXIT=1 "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
 check "executor nonzero" 20 $?
 
+echo "test: an executor that refuses the brief exits 19, not 0, and still shows the report"
+new_fixture
+OUT="$(STUB_PROBLEM="the brief names a file that does not exist" "$DISPATCH" --brief .advisor/briefs/001-test.md 2>&1)"
+check "BRIEF PROBLEM in the log" 19 $?
+assert "the report still prints, so the advisor sees what was and was not changed" \
+  grep -q '=== diff --stat' <<<"$OUT"
+
 echo "test: timeout -> 24"
 new_fixture
 STUB_HANG=5 "$DISPATCH" --brief .advisor/briefs/001-test.md --timeout 1 >/dev/null 2>&1
 check "timeout" 24 $?
+
+echo "test: a timeout is reported as 24 even when the executor exits 130 on TERM, as the real CLI does"
+new_fixture
+STUB_TERM_EXIT=130 STUB_HANG=30 "$DISPATCH" --brief .advisor/briefs/001-test.md --timeout 1 >/dev/null 2>&1
+check "timeout with a 130 exit on TERM" 24 $?
 
 echo "test: a timeout kills the executor's whole process group"
 new_fixture
@@ -185,15 +279,37 @@ else
   echo "  PASS: the executor's child died with the group"; PASS=$((PASS+1))
 fi
 
-echo "test: --continue passes -c to opencode"
+echo "test: a timeout also kills a child that moved to its own process group"
 new_fixture
-# Round 1 first: a continuation needs the baseline commit round 1 records.
+# An executor's shell command can leave the group (setsid). A group kill alone
+# misses it; the tree captured before the signal must catch it.
+PIDFILE="$FIX/child-newgroup.pid"
+STUB_CHILD=593 STUB_CHILD_NEWGROUP=1 STUB_CHILD_PIDFILE="$PIDFILE" STUB_HANG=30 \
+  "$DISPATCH" --brief .advisor/briefs/001-test.md --timeout 1 >/dev/null 2>&1
+check "timeout still maps to 24" 24 $?
+CHILD_PID="$(cat "$PIDFILE" 2>/dev/null)"
+sleep 1
+if [ -n "$CHILD_PID" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
+  echo "  FAIL: a child that left the process group survived the timeout"; FAIL=$((FAIL+1))
+  kill -KILL "$CHILD_PID" 2>/dev/null
+else
+  echo "  PASS: the child that left the process group died"; PASS=$((PASS+1))
+fi
+
+echo "test: a continuation resumes the executor's session: by id on 2.x, by -c on 1.x"
+new_fixture
+# Round 1 first: a continuation needs the baseline commit and session round 1 records.
 STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
 STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 --continue >/dev/null 2>&1
-if grep -q -- ' -c ' "$FIX/.advisor/runs/001-test-r2.log"; then
-  echo "  PASS: -c forwarded"; PASS=$((PASS+1))
+if [ "$MAJOR" = 1 ]; then
+  assert "1.x: round 2 passes -c" grep -q -- ' -c ' "$FIX/.advisor/runs/001-test-r2.log"
+  refute "1.x: no --session flag" grep -q -- '--session' "$FIX/.advisor/runs/001-test-r2.log"
 else
-  echo "  FAIL: -c not forwarded"; FAIL=$((FAIL+1))
+  SESSION1="$(grep -oE -- '--session ses_[0-9a-f]+' "$FIX/.advisor/runs/001-test-r1.log" | head -1)"
+  SESSION2="$(grep -oE -- '--session ses_[0-9a-f]+' "$FIX/.advisor/runs/001-test-r2.log" | head -1)"
+  assert "round 1 starts a session with a generated ses_ id" [ -n "$SESSION1" ]
+  check "round 2 resumes the same session" "$SESSION1" "$SESSION2"
+  refute "no -c anywhere in the continuation" grep -q -- ' -c ' "$FIX/.advisor/runs/001-test-r2.log"
 fi
 
 echo "test: a correction round runs on the tree round 1 dirtied, but a new round 1 still refuses"
@@ -339,10 +455,12 @@ new_fixture
 STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
 "$DISPATCH" --brief .advisor/briefs/001-test.md --round 2 >/dev/null 2>&1
 check "--round 2 alone on round 1's dirty tree" 12 $?
-if grep -q -- ' -c ' "$FIX/.advisor/runs/001-test-r2.log" 2>/dev/null; then
-  echo "  FAIL: a fresh round resumed the executor's session"; FAIL=$((FAIL+1))
-else
-  echo "  PASS: a fresh round did not pass -c"; PASS=$((PASS+1))
+if [ "$MAJOR" = 2 ]; then
+  S1="$(cat "$FIX/.advisor/runs/001-test-session")"
+  # The refusal happens before a session is written, so round 1's id survives it.
+  assert "round 1 recorded a session id" [ -n "$S1" ]
+  assert "the refused fresh round left that session id in place" \
+    [ "$(cat "$FIX/.advisor/runs/001-test-session")" = "$S1" ]
 fi
 
 echo "test: the executor moving a ref trips the wire -> 21, whatever the deny list missed"
@@ -443,6 +561,47 @@ OUT="$(STUB_CREATE="$FIX/fresh.txt" "$DISPATCH" --brief .advisor/briefs/001-test
 check "fresh round 2 on the rolled-back tree" 0 $?
 assert "only this attempt's file is reported" [ "$(section "$OUT" 'new files')" = "fresh.txt" ]
 
+echo "test: with no --model, the executor runs on the default model, passed explicitly"
+new_fixture
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+assert "argv carries -m with the default id" grep -q -- '-m opencode-go/deepseek-v4.1-flash' "$FIX/.advisor/runs/001-test-r1.log"
+
+echo "test: a model name from the chat resolves to its id"
+new_fixture
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md --model "DeepSeek Pro" >/dev/null 2>&1
+check "named model dispatches" 0 $?
+assert "argv carries the resolved id, not the name" grep -q -- '-m opencode-go/deepseek-v4-pro' "$FIX/.advisor/runs/001-test-r1.log"
+
+echo "test: a provider/model id passes through unchanged"
+new_fixture
+STUB_EDIT="$FIX/file.txt" "$DISPATCH" --brief .advisor/briefs/001-test.md --model opencode-go/deepseek-v4-pro >/dev/null 2>&1
+assert "explicit id reaches argv" grep -q -- '-m opencode-go/deepseek-v4-pro' "$FIX/.advisor/runs/001-test-r1.log"
+
+echo "test: an unknown model name is refused -> 17, before anything runs"
+new_fixture
+"$DISPATCH" --brief .advisor/briefs/001-test.md --model "gpt nine" >/dev/null 2>&1
+check "unknown model name" 17 $?
+assert "no run log: the executor was never invoked" [ ! -e "$FIX/.advisor/runs/001-test-r1.log" ]
+
+echo "test: a model the provider does not offer is refused -> 17, before anything runs"
+new_fixture
+STUB_NO_MODEL=opencode-go/deepseek-v4.1-flash "$DISPATCH" --brief .advisor/briefs/001-test.md >/dev/null 2>&1
+check "default model not offered" 17 $?
+assert "no run log: the executor was never invoked" [ ! -e "$FIX/.advisor/runs/001-test-r1.log" ]
+
+echo "test: the resolver maps names, refuses unknowns, and never guesses across versions"
+RES="$ROOT/bin/resolve-model.sh"
+assert "no argument gives the default" [ "$("$RES")" = "opencode-go/deepseek-v4.1-flash" ]
+assert "'deepseek-flash' resolves" [ "$("$RES" deepseek-flash)" = "opencode-go/deepseek-v4.1-flash" ]
+assert "'deepseek-v4-flash' does NOT resolve to v4.1" [ -z "$("$RES" deepseek-v4-flash 2>/dev/null)" ]
+assert "unknown names exit 1 with nothing on stdout" \
+  bash -c '[ -z "$("$1" nonsense 2>/dev/null)" ] && ! "$1" nonsense >/dev/null 2>&1' _ "$RES"
+
+echo "test: the executor's frontmatter model matches the default, so the two cannot drift"
+FM_MODEL="$(sed -n 's/^model: *//p' "$ROOT/agent/executor.md" | head -1)"
+check_eq() { [ "$1" = "$2" ] && { echo "  PASS: $3"; PASS=$((PASS+1)); } || { echo "  FAIL: $3 (agent says '$1', resolver says '$2')"; FAIL=$((FAIL+1)); }; }
+check_eq "$FM_MODEL" "$("$RES")" "executor.md model: equals the resolver default"
+
 echo "test: SKILL.md documents every exit code and flag the scripts implement"
 SKILL="$(dirname "$STUBDIR")/SKILL.md"
 for code in $(grep -oE '^readonly EXIT_[A-Z_]+=[0-9]+' "$ROOT/bin/lib.sh" | grep -oE '[0-9]+$'); do
@@ -471,6 +630,17 @@ for pat in 'git commit\*' 'git reset\*' 'git checkout\*' 'git restore\*' 'git sw
     echo "  FAIL: ${pat%\\*} is not denied in executor.md"; FAIL=$((FAIL+1))
   fi
 done
+# The executor must not read secrets through its read tool. OpenCode prepends
+# `read *.env ask` by default, and an ask stalls a run with no terminal; the
+# explicit deny has to come after the allow, because rules are last-match-wins.
+for pat in '\*\.env' '\*\.env\.\*'; do
+  if grep -qE "^ +\"$pat\": *deny" "$AGENT"; then
+    echo "  PASS: read of ${pat//\\/} denied"; PASS=$((PASS+1))
+  else
+    echo "  FAIL: read of ${pat//\\/} is not denied in executor.md"; FAIL=$((FAIL+1))
+  fi
+done
+refute "no read rule asks, which would stall a run with no terminal" grep -qE '"\*\.env[^"]*": *ask' "$AGENT"
 # Non-git bash must still be allowed, or the executor cannot run tests.
 if grep -qE '^ +"\*": *allow' "$AGENT"; then
   echo "  PASS: bash is otherwise allowed"; PASS=$((PASS+1))

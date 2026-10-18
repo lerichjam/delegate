@@ -37,6 +37,10 @@ HEAD_NOW="$(git rev-parse -q --verify HEAD)"
 [ "$HEAD_NOW" = "$BASE" ] || die $EXIT_GIT_MUTATED \
   "HEAD is ${HEAD_NOW:0:7} but this delegation started at ${BASE:0:7}. Nothing was changed; ask the user how to proceed."
 
+# The session holds the context of the work being undone, so a continuation
+# must not resume it. The next round starts a new session.
+rm -f "$(session_file "$RUNDIR" "$BRIEF_STEM")"
+
 # Tracked paths only: both index and working tree back to the base, which also
 # drops any new file the executor staged. Untracked files are untouched here.
 git restore --source="$BASE" --staged --worktree -- :/

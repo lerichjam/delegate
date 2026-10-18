@@ -69,13 +69,17 @@ This has already cost a real round: a brief specified
 
 `--round` only names the log (`.advisor/runs/NNN-slug-rN.log`). What
 decides whether a round is a continuation is `--continue` (step 6):
-without it, every dispatch is a fresh start that needs a clean tree and
-records a new base.
+without it, every dispatch is a fresh start that needs a clean tree,
+records a new base, and opens a new session. With it, the round resumes the
+session round 1 opened: by its recorded id on OpenCode 2.x, or with `-c`
+(the last session in this directory) on 1.x.
 
 Optional flags:
 
 - `--timeout <seconds>` — how long the executor gets. Default 600.
-- `--model <provider/model>` — override the executor agent's own model.
+- `--model <name or provider/model>` — the executor's model. Defaults to
+  `deepseek-flash` (`opencode-go/deepseek-v4.1-flash`). See **Choosing the
+  model** below.
 - `--message <text>` — what to tell the executor about the attached
   brief. Defaults to "Implement the attached brief. Follow it exactly.";
   a correction round must override it (step 6).
@@ -88,21 +92,43 @@ Interpret the exit code:
 | Code | Meaning | What you do |
 |---|---|---|
 | 0 | ran, diff printed | go to review |
-| 10 | opencode missing | tell the user to install it; stop |
+| 10 | opencode missing (or `OPENCODE_BIN` names nothing) | tell the user to install OpenCode 1.x or 2.x, or set `OPENCODE_BIN`; stop |
 | 11 | not a repo | back to preflight |
 | 12 | dirty tree | stop, ask the user to commit or stash |
 | 13 | brief unreadable | your bug — fix the path |
-| 14 | executor agent unresolved | run `~/.claude/skills/delegate/install.sh`, then retry |
-| 15 | no recorded baseline | you continued a delegation that never had a fresh start; dispatch without `--continue` |
+| 14 | executor agent not found by opencode | nothing ran. The refusal names OpenCode's error when it gives one. Run `~/.claude/skills/delegate/install.sh`, then retry |
+| 15 | no recorded baseline or session | you continued a delegation that never had a fresh start, or it was rolled back; dispatch without `--continue` |
+| 18 | opencode is neither 1.x nor 2.x | nothing ran. Tell the user, and stop. Do not adapt the flags to another major |
 | 16 | repository has no commits | offer a baseline commit, with the user's agreement |
+| 17 | model unknown, or not offered by opencode | nothing ran. Tell the user which names exist (`config/models.tsv`) and ask which to use. Never substitute a model yourself |
+| 19 | the executor stopped with `BRIEF PROBLEM:` | the report still prints, but do not treat it as a round. Read the problem in the log; fix the brief, or answer the executor's question, then dispatch again |
 | 20 | opencode exited nonzero | read the log: an argv or agent error means the executor never ran; otherwise review or correct |
 | 21 | the executor moved a git ref (dispatch), or HEAD is not the base (rollback) | do not accept or roll back; show the user the ref change dispatch printed — `git reflog` has the history — and let them decide |
 | 24 | timed out | read the log; raise `--timeout` first — a smaller brief is the second remedy, not the first |
 | 1 or 2 | your invocation is malformed | dispatch's own argument handling rejected it; fix the command line |
 
-Codes 10-16 mean the harness refused and nothing ran. Code 24 means the
+Codes 10-18 mean the harness refused and nothing ran. Code 24 means the
 executor was still running when the clock ran out, so the tree may hold a
 half-finished change — review it before re-dispatching.
+
+#### Choosing the model
+
+The executor always runs on an explicit model, so the one you review
+against is the one that did the work.
+
+- **The user named a model in chat** ("use deepseek pro", "try the v4.1
+  flash"): pass their words as `--model "<their words>"`. Dispatch resolves
+  them through `config/models.tsv`, and the log records the resolved id. Do
+  not translate the name yourself, and do not pass a guessed id.
+- **The user named none:** omit `--model`. The default applies.
+- **Exit 17:** the name is not in the table, or opencode does not offer it.
+  Show the user the names in `config/models.tsv` and ask which one they
+  want. Do not fall back to another model without asking.
+- A `provider/model` id is accepted as given, as long as opencode offers it.
+
+Adding a model means adding one line to `config/models.tsv`. The
+frontmatter `model:` in `agent/executor.md` must name the default; a test
+enforces this.
 
 ### 5. Review — the part that matters
 
@@ -154,8 +180,9 @@ Establish what happened yourself. The executor's report is a hypothesis.
   ~/.claude/skills/delegate/bin/rollback.sh --brief .advisor/briefs/NNN-slug.md
   ```
 
-  It restores every tracked file to the base and deletes the files the
-  executor created — only those. Your briefs survive, and so does any
+  It restores every tracked file to the base, deletes the files the
+  executor created — only those — and forgets the round's session, so a
+  `--continue` cannot resume it. Your briefs survive, and so does any
   untracked file the user added mid-delegation. If it warns that it
   could not restore a pre-existing untracked file, tell the user: git
   holds no copy of it. Then revise the brief and dispatch the next
