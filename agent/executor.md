@@ -4,7 +4,15 @@ mode: primary
 model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
-  read: allow
+  # Rules are matched last-match-wins: the defaults OpenCode prepends (such as
+  # `read *.env ask`) are overridden by these. The executor has no need for
+  # secrets, and an `ask` would stall a run that has no terminal to answer it.
+  # The shell can still read a .env file: the `bash` allow is prefix-matched too.
+  read:
+    "*": allow
+    "*.env": deny
+    "*.env.*": deny
+    "*.env.example": allow
   glob: allow
   grep: allow
   list: allow

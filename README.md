@@ -35,7 +35,7 @@ sequenceDiagram
     A->>A: Read the repo, write .advisor/briefs/NNN-slug.md
     A->>D: dispatch --brief … --round 1
     D->>D: Preflight · record base commit · snapshot
-    D->>E: opencode run --agent executor -f brief
+    D->>E: opencode run --standalone --agent executor -m model -f brief
     E->>E: Scan, implement, run verification
     D->>A: Diff vs base · new files · ref check
     A->>A: Read the diff, re-run verification
@@ -85,7 +85,9 @@ sandboxed.
 
 ## Install
 
-Requirements: Claude Code, OpenCode (tested with 1.18.32), git, and bash.
+Requirements: Claude Code, OpenCode 1.x or 2.x (tested with 1.18.21 and 2.0.27),
+git, and bash. The skill detects which major is installed and runs the matching
+flags. If the binary you want is not first on `PATH`, set `OPENCODE_BIN` to it.
 
 ```sh
 git clone https://github.com/lerichjam/delegate.git ~/.claude/skills/delegate
@@ -101,15 +103,20 @@ must live elsewhere, so this repository stays the only copy:
 | `agent/executor.md` | `~/.config/opencode/agent/executor.md` |
 | `command/delegate.md` | `~/.claude/commands/delegate.md` |
 
-The script finishes by checking that OpenCode lists the `executor` agent.
+The script finishes by asking a private OpenCode server to resolve the
+`executor` agent. The check uses a model name that does not exist, so no
+model call is made.
 
 ### Choosing the executor model
 
-The model is set in the frontmatter of
-[`agent/executor.md`](agent/executor.md). It defaults to
-`opencode-go/deepseek-v4.1-flash` at temperature 0.1. Change it to any
-provider/model that `opencode models` lists. To override it for a single
-dispatch, pass `--model`.
+The executor runs on `deepseek-flash` (`opencode-go/deepseek-v4.1-flash`) by
+default. To use another model, name it when you ask for the delegation, for
+example "delegate this to deepseek pro". The advisor passes that name to
+`--model`, and dispatch resolves it through [`config/models.tsv`](config/models.tsv).
+A name that does not resolve is refused before anything runs.
+
+To add a model, add a line to `config/models.tsv`. The default is the one
+named in `bin/resolve-model.sh`, and `agent/executor.md` must match it.
 
 ## Usage
 
@@ -142,7 +149,7 @@ what the advisor does with each one.
 ```
 .advisor/
 ├── briefs/NNN-slug.md    # the briefs: commit these alongside the change
-└── runs/                 # executor logs, base commit, file ledgers
+└── runs/                 # executor logs, base commit, session id, file ledgers
                           # (ignores itself, so logs never reach a commit)
 ```
 
@@ -155,9 +162,12 @@ command/delegate.md     the /delegate slash command
 templates/brief.md      the brief's nine sections
 bin/dispatch.sh         preflight, invocation, timeout, report
 bin/rollback.sh         undo a delegation to its base
+bin/resolve-model.sh    maps a model name from the chat to its provider/model id
 bin/lib.sh              exit codes and snapshots shared by both scripts
+config/models.tsv       model names and the ids they resolve to
+docs/                   OpenCode 1.x/2.x compatibility investigation and plan
 install.sh              symlinks + agent resolution check
-tests/                  plain-bash suite with a stub opencode
+tests/                  plain-bash suite; a stub opencode, run as 1.x or 2.x
 ```
 
 ## Tests

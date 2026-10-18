@@ -42,3 +42,39 @@ Including tracked edits the user made mid-delegation. That is consistent with
 refusing to start a delegation on a dirty tree — mid-edit delegation is not
 supported — but rollback does not tell the executor's tracked changes apart
 from anyone else's.
+
+## Secrets are readable through the shell
+
+`agent/executor.md` denies the `read` tool on `.env` files, which the
+default rules would otherwise have asked about. The `bash` allow is
+prefix-matched, so `cat .env` still works. Nested paths such as
+`config/.env` are also unverified against the `read` denies. Keep secrets
+out of the working tree, or accept that the executor can see them.
+
+## Transport failures surface as exit 20
+
+If the model connection drops mid-run, OpenCode reports
+`Transport: The socket connection was closed unexpectedly` and dispatch
+exits 20. Nothing retries the round. The log keeps the error.
+
+## OpenCode 1.x limits
+
+On 1.x the executor runs in the same process as the CLI, and the continuation
+resumes the last session in the directory (`-c`), not a stored session id. So:
+
+- A correction round continues whatever session is newest in this directory.
+  Anything else run in this repository between rounds is the one continued.
+- Rollback cannot forget a 1.x session, so a `--continue` after rollback
+  resumes the work that was undone. Re-brief with a fresh round instead.
+- A timeout kills the executor's process tree, including children that left
+  the process group. A child that has already reparented to launchd before
+  the timeout is not in the tree, and it can survive.
+
+## Shared OpenCode database
+
+1.x and 2.x share one database. On the machine this was tested on, one
+repository had two project rows: its root commit had been rewritten, so the
+project id changed. There, `opencode agent list` under 1.x failed with
+`no such column: project_id`, and the skill refused with that error. Other
+repositories were unaffected. Removing the stale row changes the shared
+database, so do that deliberately.
