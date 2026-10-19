@@ -73,12 +73,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOLVED="$("$SCRIPT_DIR/resolve-model.sh" "$MODEL")" \
   || die $EXIT_NO_MODEL "unknown model '${MODEL:-<default>}'. Names are listed in config/models.tsv; pass a provider/model id to use one not listed there."
 MODELS_TMP="$(mktemp)"
-oc_models "$OC" "$MAJOR" "$MODELS_TMP"
+# `opencode models` can come back empty or short for a moment (another opencode
+# process still holding its store, a slow start). That is not a retired model,
+# so look again a couple of times before refusing.
+for attempt in 1 2 3; do
+  oc_models "$OC" "$MAJOR" "$MODELS_TMP"
+  grep -qxF -- "$RESOLVED" "$MODELS_TMP" && break
+  [ "$attempt" -lt 3 ] && sleep 3
+done
 if ! grep -qxF -- "$RESOLVED" "$MODELS_TMP"; then
-  rm -f "$MODELS_TMP"
-  die $EXIT_NO_MODEL "OpenCode does not offer '$RESOLVED'. It may be retired or misspelled; update config/models.tsv."
+  SEEN="$(wc -l <"$MODELS_TMP" | tr -d ' ')"
+  WHY="$(oc_error_line "$MODELS_TMP.err")"
+  rm -f "$MODELS_TMP" "$MODELS_TMP.err"
+  die $EXIT_NO_MODEL "OpenCode does not offer '$RESOLVED' (its model list had $SEEN entries after 3 tries${WHY:+; it said: $WHY}). It may be retired or misspelled; update config/models.tsv."
 fi
-rm -f "$MODELS_TMP"
+rm -f "$MODELS_TMP" "$MODELS_TMP.err"
 MODEL="$RESOLVED"
 
 BRIEF_STEM="$(basename "$BRIEF" .md)"

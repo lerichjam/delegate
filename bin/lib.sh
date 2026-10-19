@@ -65,10 +65,12 @@ oc_major() {
 # oc_models <binary> <major> <outfile> -- the model ids OpenCode offers, one per
 # line, colour codes removed. Written to a file: piping this output truncates it.
 oc_models() {
+  # stderr is kept beside the list ("<outfile>.err") so a refusal can say why
+  # the list was empty or short instead of blaming the model name.
   if [ "$2" -eq 1 ]; then
-    "$1" models >"$3" 2>/dev/null
+    "$1" models >"$3" 2>"$3.err"
   else
-    "$1" models --standalone >"$3" 2>/dev/null
+    "$1" models --standalone >"$3" 2>"$3.err"
   fi
   sed -i.bak 's/\x1b\[[0-9;]*m//g; s/\r$//' "$3" && rm -f "$3.bak"
 }
