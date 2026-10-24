@@ -7,7 +7,8 @@ permission:
   # Rules are matched last-match-wins: the defaults OpenCode prepends (such as
   # `read *.env ask`) are overridden by these. The executor has no need for
   # secrets, and an `ask` would stall a run that has no terminal to answer it.
-  # The shell can still read a .env file: the `bash` allow is prefix-matched too.
+  # This covers the read tool only. The shell is kept away from .env files by
+  # the sandbox dispatch.sh runs the executor in, where one is available.
   read:
     "*": allow
     "*.env": deny
