@@ -35,7 +35,7 @@ sequenceDiagram
     A->>A: Read the repo, write .advisor/briefs/NNN-slug.md
     A->>D: dispatch --brief … --round 1
     D->>D: Preflight · record base commit · snapshot
-    D->>E: opencode run --standalone --agent executor -m model -f brief
+    D->>E: opencode run --agent executor -m model -f brief
     E->>E: Scan, implement, run verification
     D->>A: Diff vs base · new files · ref check
     A->>A: Read the diff, re-run verification
@@ -77,7 +77,8 @@ did. The scripts check that mechanically:
 | The executor editing your brief or other untracked files | Reported from the same snapshot |
 | The executor committing, resetting or stashing | Denied in the agent config, and every git ref is compared after the round (exit 21) |
 | Rollback deleting your own files | Rollback deletes only files the executor created, and only if git still shows them as untracked |
-| A hung executor still writing while you review | A timeout kills the executor's whole process group, not just the parent |
+| The executor reading your `.env` secrets | On macOS the executor runs in a `sandbox-exec` profile that makes `.env` files unreadable to it and everything it starts; elsewhere dispatch says the run is unprotected |
+| A hung executor still writing while you review | A timeout, or dispatch itself being killed, stops the executor's whole process tree |
 
 What these checks don't cover is in
 [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md). In short: the executor is not
@@ -103,9 +104,10 @@ must live elsewhere, so this repository stays the only copy:
 | `agent/executor.md` | `~/.config/opencode/agent/executor.md` |
 | `command/delegate.md` | `~/.claude/commands/delegate.md` |
 
-The script finishes by asking a private OpenCode server to resolve the
-`executor` agent. The check uses a model name that does not exist, so no
-model call is made.
+If either target already exists and is not this repository's link — your own
+`executor` agent or `/delegate` command — the script stops rather than replace
+it. It finishes by checking that OpenCode resolves the `executor` agent. The
+check makes no model call.
 
 ### Choosing the executor model
 
@@ -115,8 +117,8 @@ example "delegate this to deepseek pro". The advisor passes that name to
 `--model`, and dispatch resolves it through [`config/models.tsv`](config/models.tsv).
 A name that does not resolve is refused before anything runs.
 
-To add a model, add a line to `config/models.tsv`. The default is the one
-named in `bin/resolve-model.sh`, and `agent/executor.md` must match it.
+To add a model, add a line to `config/models.tsv`. The default is the
+`model:` in `agent/executor.md`.
 
 ## Usage
 
@@ -165,7 +167,6 @@ bin/rollback.sh         undo a delegation to its base
 bin/resolve-model.sh    maps a model name from the chat to its provider/model id
 bin/lib.sh              exit codes and snapshots shared by both scripts
 config/models.tsv       model names and the ids they resolve to
-docs/                   OpenCode 1.x/2.x compatibility investigation and plan
 install.sh              symlinks + agent resolution check
 tests/                  plain-bash suite; a stub opencode, run as 1.x or 2.x
 ```
@@ -178,12 +179,7 @@ bash tests/test_dispatch.sh
 
 The suite is plain bash, with no bats or shellcheck needed. Each case runs in
 a throwaway git repository against a stub `opencode` that copies the real
-CLI's argument quirks. It also checks that SKILL.md documents every exit code
-and flag the scripts implement, and that the executor's git deny list is in
-place.
-
-## Not to be confused with
-
-`ralf-opencode` and similar loops grind through many issues unattended.
-`delegate` is the opposite trade-off: one task, with the advisor reading
-every diff.
+CLI's argument quirks. Run it once per major with `OC_TEST_MAJOR=1` and
+`OC_TEST_MAJOR=2` (the default). It also checks that SKILL.md documents every
+exit code and flag the scripts implement, and that the executor's git deny
+list is in place.

@@ -1,7 +1,6 @@
 # Known limitations
 
-What the toolkit still cannot do, after the fixes of 2026-09-25. None blocks
-supervised single-task use.
+What the toolkit cannot do. None blocks supervised single-task use.
 
 ## The executor is not sandboxed
 
@@ -16,10 +15,35 @@ That check is detection, after the fact. It cannot see:
 
 - a push to a URL with no remote-tracking ref, such as `git push https://...`;
 - anything outside git — the executor can delete or rewrite any file its user
-  can.
+  can, and reach the network through the shell.
 
 Treat the denies and the tripwire as protection against an unhelpful executor,
-not a hostile one.
+not a hostile one. Do not delegate in a repository, or as a user, whose
+reach you would not hand to the executor's model.
+
+## Secrets: what the .env protection covers
+
+On macOS, dispatch runs the executor inside `sandbox-exec`, which denies
+reading or writing any `.env` or `.env.*` file (`.env.example` excepted) to
+the executor and every process it starts. The kernel enforces it, so
+`cat`, scripts, symlinks, copies, renames and hard links all fail. The
+`read` tool is denied the same files in `agent/executor.md`.
+
+It does not cover:
+
+- **Other platforms.** Without `sandbox-exec` (Linux), or when dispatch
+  itself runs inside a sandbox (they do not nest), the run goes ahead
+  unprotected and dispatch prints `secrets -> NOT protected`. Only the
+  `read`-tool deny applies there, and the shell can still read `.env`.
+- **Secrets committed to git.** `git show HEAD:.env` reads from the object
+  store, not the file.
+- **Secrets in the environment.** The executor inherits dispatch's
+  environment, so anything exported in your shell is visible to it.
+- **Other secret files**, such as `~/.ssh`, `~/.aws` or `.npmrc`.
+
+Everything the executor reads can end up in `.advisor/runs/` logs and with
+the model provider. The executor also cannot create or edit a `.env` under
+the sandbox, so a brief that needs one must leave that step to the user.
 
 ## Ignored files are invisible to review
 
@@ -43,13 +67,12 @@ refusing to start a delegation on a dirty tree — mid-edit delegation is not
 supported — but rollback does not tell the executor's tracked changes apart
 from anyone else's.
 
-## Secrets are readable through the shell
+## A killed dispatch can only stop what it can see
 
-`agent/executor.md` denies the `read` tool on `.env` files, which the
-default rules would otherwise have asked about. The `bash` allow is
-prefix-matched, so `cat .env` still works. Nested paths such as
-`config/.env` are also unverified against the `read` denies. Keep secrets
-out of the working tree, or accept that the executor can see them.
+Dispatch stops the executor when it is interrupted (exit 130) or times out
+(exit 24), including children that left the process group. It cannot act on a
+`SIGKILL` sent to dispatch itself, and a child that had already been
+reparented to init before the stop is not in the tree it walks.
 
 ## Transport failures surface as exit 20
 
@@ -57,24 +80,16 @@ If the model connection drops mid-run, OpenCode reports
 `Transport: The socket connection was closed unexpectedly` and dispatch
 exits 20. Nothing retries the round. The log keeps the error.
 
-## OpenCode 1.x limits
+## OpenCode 1.x continues the newest session
 
-On 1.x the executor runs in the same process as the CLI, and the continuation
-resumes the last session in the directory (`-c`), not a stored session id. So:
+On 1.x a correction round resumes the last session in the repository (`-c`),
+not a recorded session id. Anything else run with OpenCode in this repository
+between rounds is the session that gets continued. 2.x pins the id.
 
-- A correction round continues whatever session is newest in this directory.
-  Anything else run in this repository between rounds is the one continued.
-- Rollback cannot forget a 1.x session, so a `--continue` after rollback
-  resumes the work that was undone. Re-brief with a fresh round instead.
-- A timeout kills the executor's process tree, including children that left
-  the process group. A child that has already reparented to launchd before
-  the timeout is not in the tree, and it can survive.
+## OpenCode 2.x notes
 
-## Shared OpenCode database
-
-1.x and 2.x share one database. On the machine this was tested on, one
-repository had two project rows: its root commit had been rewritten, so the
-project id changed. There, `opencode agent list` under 1.x failed with
-`no such column: project_id`, and the skill refused with that error. Other
-repositories were unaffected. Removing the stale row changes the shared
-database, so do that deliberately.
+- The agent is read from the global agent directory. A project-level
+  `.opencode/agent/executor.md` is not loaded by the private server each run
+  uses.
+- Runs started right after an `opencode reload` of the shared service were
+  seen to stall with no output. Do not reload just before a delegation.

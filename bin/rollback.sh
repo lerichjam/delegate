@@ -21,7 +21,7 @@ git rev-parse --git-dir >/dev/null 2>&1 \
 BRIEF_STEM="$(basename "$BRIEF" .md)"
 TOP="$(git rev-parse --show-toplevel)"
 RUNDIR="$TOP/.advisor/runs"
-BASEFILE="$RUNDIR/${BRIEF_STEM}-base"
+BASEFILE="$(base_file "$RUNDIR" "$BRIEF_STEM")"
 CREATED="$(created_ledger "$RUNDIR" "$BRIEF_STEM")"
 TOUCHED="$(touched_ledger "$RUNDIR" "$BRIEF_STEM")"
 
@@ -37,13 +37,10 @@ HEAD_NOW="$(git rev-parse -q --verify HEAD)"
 [ "$HEAD_NOW" = "$BASE" ] || die $EXIT_GIT_MUTATED \
   "HEAD is ${HEAD_NOW:0:7} but this delegation started at ${BASE:0:7}. Nothing was changed; ask the user how to proceed."
 
-# The session holds the context of the work being undone, so a continuation
-# must not resume it. The next round starts a new session.
-rm -f "$(session_file "$RUNDIR" "$BRIEF_STEM")"
-
 # Tracked paths only: both index and working tree back to the base, which also
 # drops any new file the executor staged. Untracked files are untouched here.
-git restore --source="$BASE" --staged --worktree -- :/
+git restore --source="$BASE" --staged --worktree -- :/ \
+  || die $EXIT_GIT_MUTATED "git restore failed; the tree is partly restored. Show the user 'git status'."
 
 # A ledger entry is deleted only if git reports that exact path as untracked
 # right now. That bounds this loop to untracked files inside this repository,
@@ -70,7 +67,10 @@ if [ -s "$TOUCHED" ]; then
   sed 's/^/  /' "$TOUCHED" >&2
 fi
 
-: > "$CREATED"; : > "$TOUCHED"
+# The delegation is over. Without its base and session, a --continue is refused
+# on either major instead of resuming the context of the work just undone (1.x
+# would otherwise resume it with -c). The next round starts fresh.
+rm -f "$BASEFILE" "$(session_file "$RUNDIR" "$BRIEF_STEM")" "$CREATED" "$TOUCHED"
 echo "rollback: tree restored to base ${BASE:0:7}. Remaining changes:"
 git status --short
 exit $EXIT_OK

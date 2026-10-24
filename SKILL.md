@@ -18,7 +18,6 @@ a small local edit you already understand, just make the edit. Delegate
 when the work is substantial enough that specifying it costs less than
 doing it — a new module, a broad refactor, wiring across many files.
 
-This is not `ralf-opencode`. That skill grinds many issues unattended.
 This is one task, supervised, with you reading every diff.
 
 ## Process
@@ -67,6 +66,12 @@ This has already cost a real round: a brief specified
 ~/.claude/skills/delegate/bin/dispatch.sh --brief .advisor/briefs/NNN-slug.md --round 1
 ```
 
+**Run it with the Bash tool's `run_in_background: true`** and wait for the
+completion notice. The executor gets up to 600 seconds, and the Bash tool's
+own timeout (2 minutes by default) would otherwise kill dispatch first. Dispatch
+stops the executor when that happens (exit 130), so the round is lost. Do not
+poll the log while it runs, and do not edit the tree.
+
 `--round` only names the log (`.advisor/runs/NNN-slug-rN.log`). What
 decides whether a round is a continuation is `--continue` (step 6):
 without it, every dispatch is a fresh start that needs a clean tree,
@@ -85,7 +90,9 @@ Optional flags:
   a correction round must override it (step 6).
 
 Dispatch echoes the base commit it pinned the diff to. Note it — step 5
-needs it.
+needs it. It also prints a `secrets ->` line. If it says `NOT protected`,
+tell the user in your report: the executor's shell could read `.env` files
+on that run.
 
 Interpret the exit code:
 
@@ -98,18 +105,19 @@ Interpret the exit code:
 | 13 | brief unreadable | your bug — fix the path |
 | 14 | executor agent not found by opencode | nothing ran. The refusal names OpenCode's error when it gives one. Run `~/.claude/skills/delegate/install.sh`, then retry |
 | 15 | no recorded baseline or session | you continued a delegation that never had a fresh start, or it was rolled back; dispatch without `--continue` |
-| 18 | opencode is neither 1.x nor 2.x | nothing ran. Tell the user, and stop. Do not adapt the flags to another major |
 | 16 | repository has no commits | offer a baseline commit, with the user's agreement |
 | 17 | model unknown, or not offered by opencode | nothing ran. Tell the user which names exist (`config/models.tsv`) and ask which to use. Never substitute a model yourself |
+| 18 | opencode is neither 1.x nor 2.x | nothing ran. Tell the user, and stop. Do not adapt the flags to another major |
 | 19 | the executor stopped with `BRIEF PROBLEM:` | the report still prints, but do not treat it as a round. Read the problem in the log; fix the brief, or answer the executor's question, then dispatch again |
 | 20 | opencode exited nonzero | read the log: an argv or agent error means the executor never ran; otherwise review or correct |
 | 21 | the executor moved a git ref (dispatch), or HEAD is not the base (rollback) | do not accept or roll back; show the user the ref change dispatch printed — `git reflog` has the history — and let them decide |
 | 24 | timed out | read the log; raise `--timeout` first — a smaller brief is the second remedy, not the first |
+| 130 | dispatch itself was killed (a tool timeout, Ctrl-C) and stopped the executor | treat it like 24. If a Bash timeout did it, re-run in the background |
 | 1 or 2 | your invocation is malformed | dispatch's own argument handling rejected it; fix the command line |
 
-Codes 10-18 mean the harness refused and nothing ran. Code 24 means the
-executor was still running when the clock ran out, so the tree may hold a
-half-finished change — review it before re-dispatching.
+Codes 10-18 mean the harness refused and nothing ran. Codes 24 and 130 mean
+the executor was stopped mid-run, so the tree may hold a half-finished
+change — review it before re-dispatching.
 
 #### Choosing the model
 
@@ -126,9 +134,8 @@ against is the one that did the work.
   want. Do not fall back to another model without asking.
 - A `provider/model` id is accepted as given, as long as opencode offers it.
 
-Adding a model means adding one line to `config/models.tsv`. The
-frontmatter `model:` in `agent/executor.md` must name the default; a test
-enforces this.
+Adding a model means adding one line to `config/models.tsv`. The default
+is the frontmatter `model:` in `agent/executor.md`.
 
 ### 5. Review — the part that matters
 
@@ -181,8 +188,8 @@ Establish what happened yourself. The executor's report is a hypothesis.
   ```
 
   It restores every tracked file to the base, deletes the files the
-  executor created — only those — and forgets the round's session, so a
-  `--continue` cannot resume it. Your briefs survive, and so does any
+  executor created — only those — and ends the delegation, so a
+  `--continue` is refused (exit 15) rather than resuming the undone work. Your briefs survive, and so does any
   untracked file the user added mid-delegation. If it warns that it
   could not restore a pre-existing untracked file, tell the user: git
   holds no copy of it. Then revise the brief and dispatch the next

@@ -15,6 +15,7 @@ readonly EXIT_BRIEF_PROBLEM=19
 readonly EXIT_EXECUTOR=20
 readonly EXIT_GIT_MUTATED=21
 readonly EXIT_TIMEOUT=24
+readonly EXIT_INTERRUPTED=130
 
 die() { echo "${0##*/}: $2" >&2; exit "$1"; }
 usage_error() { echo "${0##*/}: $1" >&2; exit 2; }
@@ -45,9 +46,11 @@ snapshot_refs() {
 created_ledger() { printf '%s/%s-created' "$1" "$2"; }   # <rundir> <stem>
 touched_ledger() { printf '%s/%s-touched' "$1" "$2"; }   # <rundir> <stem>
 
-# The OpenCode session a delegation runs in, one ses_ id. Round 1 writes it and
-# every correction round resumes it with --session, so a correction can never
-# attach to whatever session happens to be newest in the project.
+# The base commit a delegation is diffed and rolled back against.
+base_file() { printf '%s/%s-base' "$1" "$2"; }           # <rundir> <stem>
+# The OpenCode 2.x session a delegation runs in, one ses_ id. Round 1 writes it
+# and every correction round resumes it with --session, so a correction can
+# never attach to whatever session happens to be newest in the project.
 session_file() { printf '%s/%s-session' "$1" "$2"; }     # <rundir> <stem>
 
 # ---- OpenCode version differences -------------------------------------------
@@ -65,10 +68,12 @@ oc_major() {
 # oc_models <binary> <major> <outfile> -- the model ids OpenCode offers, one per
 # line, colour codes removed. Written to a file: piping this output truncates it.
 oc_models() {
+  # stderr is kept beside the list ("<outfile>.err") so a refusal can say why
+  # the list was empty or short instead of blaming the model name.
   if [ "$2" -eq 1 ]; then
-    "$1" models >"$3" 2>/dev/null
+    "$1" models >"$3" 2>"$3.err"
   else
-    "$1" models --standalone >"$3" 2>/dev/null
+    "$1" models --standalone >"$3" 2>"$3.err"
   fi
   sed -i.bak 's/\x1b\[[0-9;]*m//g; s/\r$//' "$3" && rm -f "$3.bak"
 }
@@ -91,6 +96,30 @@ descendants() {
     descendants "$c"
     echo "$c"
   done
+}
+
+# secrets_profile -- the macOS sandbox profile the executor runs under. Everything
+# is allowed except reading or writing a .env or .env.* file (.env.example stays
+# open), so no command, script or child the executor starts can read one, however
+# it is spelled. The kernel checks the resolved path, so a symlink does not get
+# round it, and renaming or hard-linking the file needs the write it denies.
+secrets_profile() {
+  cat <<'EOF'
+(version 1)
+(allow default)
+(deny file-read-data file-write* (regex #"/\.env$" #"/\.env\.[^/]*$"))
+(allow file-read-data file-write* (regex #"/\.env\.example$"))
+EOF
+}
+
+# stop_tree <pid> -- TERM, then KILL, the process group led by <pid> and every
+# descendant, so nothing the executor started keeps editing the tree.
+stop_tree() {
+  local tree
+  tree="$(descendants "$1")"
+  kill -TERM -"$1" $tree 2>/dev/null
+  sleep 3
+  kill -KILL -"$1" $tree 2>/dev/null
 }
 
 # oc_error_line <file> -- the first error OpenCode printed, if any, so a refusal

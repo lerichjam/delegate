@@ -86,7 +86,6 @@ while [ $# -gt 0 ]; do
       [ "$1" = "--standalone" ] || { SESSION="$2"; shift; } ;;
     -c|--continue) ;;
     --agent)            AGENT="$2"; shift ;;
-    --session|-s)       SESSION="$2"; shift ;;
     -m|--model)         MODEL_ID="$2"; shift ;;
     -f|--file)          FILE="$2"; shift ;;
     --)                 shift; MSG="$*"; break ;;

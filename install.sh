@@ -6,9 +6,22 @@ set -uo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OC="${OPENCODE_BIN:-opencode}"
 
+# link <source> <target> -- symlink, but never over a file that is not already
+# this repository's link: someone else's `executor` agent or `/delegate`
+# command would be silently replaced.
+link() {
+  if [ -e "$2" ] || [ -L "$2" ]; then
+    if [ "$(readlink "$2")" != "$1" ]; then
+      echo "ERROR: $2 already exists and is not a link to $1. Move it aside, then re-run." >&2
+      exit 1
+    fi
+  fi
+  ln -sf "$1" "$2"
+}
+
 mkdir -p ~/.config/opencode/agent ~/.claude/commands
-ln -sf "$SRC/agent/executor.md"    ~/.config/opencode/agent/executor.md
-ln -sf "$SRC/command/delegate.md"  ~/.claude/commands/delegate.md
+link "$SRC/agent/executor.md"   ~/.config/opencode/agent/executor.md
+link "$SRC/command/delegate.md" ~/.claude/commands/delegate.md
 
 echo "linked:"
 ls -l ~/.config/opencode/agent/executor.md ~/.claude/commands/delegate.md
